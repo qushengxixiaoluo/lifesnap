@@ -97,8 +97,6 @@ flutter build web --release --base-href /lifesnap/
 - 点**测试连接**验证三件套是否配通
 - 生成按张计费（走你自己的 Key），费用由你的服务商决定
 
-![AI 配置](screenshots/settings.png)
-
 ## 平台支持
 
 | 平台 | 状态 | 说明 |
