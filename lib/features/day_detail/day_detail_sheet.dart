@@ -479,12 +479,8 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
                   ),
                 ),
             ],
-            if (summary.model.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text('由 ${summary.model} 生成',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(fontSize: 11)),
-            ],
+            // 不再展示「由 xx 模型生成」：总结是给用户的，不该暴露生成来源
+            //（model 字段仍入库，供批量清理/排障用，只是 UI 不显示）。
           ],
         ],
       ),
@@ -511,8 +507,9 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
     );
   }
 
-  /// 照片网格：GridView.builder 走 builder 惰性取子项，256 档缩略图由
-  /// ThumbImage 自己排队生成，不阻塞面板打开；点任意图进全屏查看器。
+  /// 照片网格：512 档缩略图（高分屏上 256 偏软，用户拍板升级），
+  /// 点击进全屏查看器（原图流式加载），查看器里删除返回 true 时重载本日记录；
+  /// 长按 = 直接「从记录移除」快捷入口。
   Widget _photoGrid(DayRecord record) {
     return GridView.builder(
       shrinkWrap: true,
@@ -524,23 +521,64 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
         mainAxisSpacing: 8,
       ),
       itemCount: record.photos.length,
-      itemBuilder: (context, index) => Semantics(
-        button: true,
-        label: '放大查看第 ${index + 1} 张照片',
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: () => showPhotoViewer(context, record.photos[index].path),
-          child: ClipRRect(
+      itemBuilder: (context, index) {
+        final path = record.photos[index].path;
+        return Semantics(
+          button: true,
+          label: '查看第 ${index + 1} 张照片，长按可移除',
+          child: InkWell(
             borderRadius: BorderRadius.circular(10),
-            child: ThumbImage(
-              sourcePath: record.photos[index].path,
-              size: 256,
-              placeholderColor: ShiguangColors.paperDeep,
+            onTap: () async {
+              final deleted = await showPhotoViewer(context, path);
+              if (deleted == true && mounted) await _afterPhotoRemoved();
+            },
+            onLongPress: () => _confirmRemovePhoto(path),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: ThumbImage(
+                sourcePath: path,
+                size: 512,
+                placeholderColor: ShiguangColors.paperDeep,
+              ),
             ),
           ),
-        ),
+        );
+      },
+    );
+  }
+
+  /// 长按移除：与查看器里的删除同一套文案与语义（只移出记录，不动原文件）。
+  Future<void> _confirmRemovePhoto(String path) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('从记录中移除这张照片？'),
+        content: const Text('只从拾光手册的这一天里移除，不会删除系统相册或磁盘里的原文件。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            child: const Text('移除'),
+          ),
+        ],
       ),
     );
+    if (ok != true || _store == null || !mounted) return;
+    await _store!.removePhotos([path]);
+    if (mounted) await _afterPhotoRemoved();
+  }
+
+  /// 照片被移除后的收尾：若当天已一张不剩，连同 AI 总结一起删——
+  /// 没有素材的总结留着只会误导（这正是 deleteSummary 的主要用途）。
+  Future<void> _afterPhotoRemoved() async {
+    if (_store != null) {
+      final left = await _store!.photosOfDay(widget.dayKey);
+      if (left.isEmpty) await _store!.deleteSummary(widget.dayKey);
+    }
+    if (mounted) _reloadRecord();
   }
 
   Widget _generateButton() {

@@ -47,14 +47,17 @@ Future<Uint8List?> generateThumb(String sourcePath, int bucketSize) async {
   }
 }
 
-/// 读取源字节：普通文件走 dart:io；pm:// 走 photo_manager 缩略图接口
-/// （相册原图可能被系统压缩策略隐藏，接口拿的是可解码的原比例图）。
+/// 读取源字节：普通文件走 dart:io；pm:// 走 photo_manager **原图**接口
+/// （originBytes——原先用 thumbnailData 是系统小图，缩略图/放大全糊的根源；
+/// 原图字节较大，但整条解码链在 isolate 里，主 isolate 只过一次引用）。
 Future<Uint8List?> _readSource(String sourcePath) async {
   if (sourcePath.startsWith('pm://')) {
     try {
       final asset = await AssetEntity.fromId(sourcePath.substring(5));
       if (asset == null) return null;
-      return await asset.thumbnailData;
+      final origin = await asset.originBytes;
+      if (origin != null && origin.isNotEmpty) return origin;
+      return await asset.thumbnailData; // 原图接口失败时的兜底
     } catch (_) {
       return null; // 桌面端无插件实现 / 权限过期：直接放弃生成
     }

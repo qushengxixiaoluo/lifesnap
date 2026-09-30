@@ -41,6 +41,10 @@ abstract class PhotoIndexStore {
   Future<AiSummary?> summaryOf(int dayKey);
   Future<void> putSummary(AiSummary summary);
 
+  /// 删除某天的 AI 总结（用户清理入口：按模型批量删 / 单日重生成前清缓存）。
+  /// 删除后 dayIndex.hasSummary 必须同步失效（各实现自行刷新）。
+  Future<void> deleteSummary(int dayKey);
+
   Future<void> close();
 }
 
@@ -149,6 +153,16 @@ class InMemoryPhotoIndexStore implements PhotoIndexStore {
   @override
   Future<void> putSummary(AiSummary summary) async =>
       _summaries[summary.dayKey] = summary;
+
+  @override
+  Future<void> deleteSummary(int dayKey) async {
+    _summaries.remove(dayKey);
+    // dayIndex 里的 hasSummary 同步置 false（set 后节点金勾立即消失）
+    final meta = _dayIndex[dayKey];
+    if (meta != null && meta.hasSummary) {
+      _dayIndex[dayKey] = meta.copyWith(hasSummary: false);
+    }
+  }
 
   @override
   Future<void> close() async {}

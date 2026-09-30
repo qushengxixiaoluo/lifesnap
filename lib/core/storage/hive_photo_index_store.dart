@@ -233,6 +233,12 @@ class HivePhotoIndexStore implements PhotoIndexStore {
   }
 
   @override
+  Future<void> deleteSummary(int dayKey) async {
+    await _summariesBox.delete('$dayKey');
+    await refreshDayIndex(); // hasSummary 随之置 false（与 put 对称）
+  }
+
+  @override
   Future<void> close() async {
     // 逐个关闭而不是 Hive.close()：后者是全局的，会误伤同进程里的其他实例
     for (final box in [_photos, _sources, _summaries, _days, _meta]) {

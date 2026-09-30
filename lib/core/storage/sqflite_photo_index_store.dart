@@ -248,6 +248,16 @@ class SqflitePhotoIndexStore implements PhotoIndexStore {
   }
 
   @override
+  Future<void> deleteSummary(int dayKey) async {
+    await _database.delete(
+      'summaries',
+      where: 'day_key = ?',
+      whereArgs: [dayKey],
+    );
+    await refreshDayIndex(); // hasSummary 随之置 false（与 put 对称）
+  }
+
+  @override
   Future<void> close() async {
     await _db?.close();
     _db = null;
