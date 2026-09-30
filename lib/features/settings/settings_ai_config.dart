@@ -1,8 +1,12 @@
 /// 设置页 · AI 配置分区（E 轨）。
 ///
-/// 覆盖：服务商两卡单选、Base URL（OpenAI 兼容必填）、模型下拉（预设+自定义）、
-/// API Key 密码框与保存/更换/清除、测试连接、每日送图上限步进、effort 下拉。
-/// 每次改动都经 SettingsStore.saveAiConfig 落盘；key 只走 ApiKeyStore（不进明文偏好）。
+/// 布局按用户要求统一为「三件套」固定平铺，两种请求格式都常显：
+///   ① API 地址（Anthropic 留空=官方；OpenAI 必填，可指中转）
+///   ② API Key（安全存储，保存后不回显）
+///   ③ 模型名称（自由文本，随格式切换给推荐默认值）
+/// 服务商两卡只决定**请求报文格式**（Messages API vs Chat Completions），
+/// 不再隐藏/显示字段。每次改动经 SettingsStore.saveAiConfig 落盘；
+/// key 只走 ApiKeyStore（不进明文偏好）。
 library;
 
 import 'package:flutter/material.dart';
@@ -15,9 +19,6 @@ import '../../core/models/models.dart';
 import '../../core/storage/settings_store.dart';
 import 'settings_utils.dart';
 
-/// 自定义模型在下拉里的哨兵值（不能与任何真实模型 id 撞名）。
-const _kCustomModelValue = '__custom__';
-
 class AiConfigSection extends StatefulWidget {
   const AiConfigSection({super.key});
 
@@ -29,7 +30,6 @@ class _AiConfigSectionState extends State<AiConfigSection> {
   AiConfig? _config; // null = 还在读盘
   bool _keyExists = false;
   bool _replacingKey = false; // 已存 key 时是否正在输入新值（切换输入框显隐）
-  bool _showCustomModel = false; // 下拉选了「自定义」→ 露出模型 id 输入框
   bool _savingKey = false;
   bool _testing = false;
   bool _testOk = false;
@@ -63,8 +63,6 @@ class _AiConfigSectionState extends State<AiConfigSection> {
       _keyExists = hasKey;
       _baseCtrl.text = cfg.baseUrl;
       _modelCtrl.text = cfg.model;
-      _showCustomModel = !_modelPresetsFor(cfg.provider)
-          .any((p) => p.$2 == cfg.model);
     });
   }
 
@@ -87,12 +85,12 @@ class _AiConfigSectionState extends State<AiConfigSection> {
     if (cfg == null) return;
     var next = cfg.copyWith(provider: kind);
     // 换平台后模型大概率不兼容（claude 不能打给 OpenAI），
-    // 自动落到新平台的首选预设，避免用户带病点「测试连接」。
+    // 自动落到新平台的默认模型，避免用户带病点「测试连接」；
+    // 模型名现在是自由文本，改完输入框同步显示。
     final presets = _modelPresetsFor(kind);
     if (!presets.any((p) => p.$2 == next.model)) {
       next = next.copyWith(model: presets.first.$2);
       _modelCtrl.text = next.model;
-      _showCustomModel = false;
     }
     await _save(next);
   }
@@ -228,17 +226,18 @@ class _AiConfigSectionState extends State<AiConfigSection> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         sectionTitle(context, Icons.auto_awesome_outlined, 'AI 配置',
-            subtitle: '总结的质量与花费都由这里决定'),
+            subtitle: '地址 · Key · 模型 三件套，两种格式通用'),
         const SizedBox(height: 12),
         _providerCards(context, cfg),
-        if (cfg.provider == AiProviderKind.openai) ...[
-          const SizedBox(height: 12),
-          _baseUrlField(cfg),
-        ],
+        // ① API 地址（两种格式都常显：Anthropic 留空即官方，OpenAI 指官方或中转）
         const SizedBox(height: 12),
-        _modelRow(cfg),
+        _baseUrlField(cfg),
+        // ② API Key
         const SizedBox(height: 16),
         _apiKeyBlock(context),
+        // ③ 模型名称（自由文本，随格式切换给推荐默认）
+        const SizedBox(height: 12),
+        _modelField(cfg),
         const SizedBox(height: 16),
         _testBlock(),
         const SizedBox(height: 16),
@@ -256,7 +255,7 @@ class _AiConfigSectionState extends State<AiConfigSection> {
             cfg,
             AiProviderKind.anthropic,
             'Anthropic',
-            'Claude 官方 API',
+            '报文格式：Messages API',
           ),
         ),
         const SizedBox(width: 8),
@@ -265,7 +264,7 @@ class _AiConfigSectionState extends State<AiConfigSection> {
             cfg,
             AiProviderKind.openai,
             'OpenAI 兼容',
-            '官方或中转，需填 Base URL',
+            '报文格式：Chat Completions',
           ),
         ),
       ],
@@ -325,78 +324,43 @@ class _AiConfigSectionState extends State<AiConfigSection> {
     );
   }
 
+  /// ① API 地址：两种格式统一常显。
+  /// Anthropic 留空 = 官方端点（适配器兜底）；OpenAI 必填（官方或中转）。
   Widget _baseUrlField(AiConfig cfg) {
+    final isAnthropic = cfg.provider == AiProviderKind.anthropic;
     return TextField(
       controller: _baseCtrl,
       keyboardType: TextInputType.url,
-      decoration: const InputDecoration(
-        labelText: 'Base URL（OpenAI 兼容必填）',
-        hintText: 'https://api.openai.com/v1',
-        border: OutlineInputBorder(),
+      decoration: InputDecoration(
+        labelText: 'API 地址',
+        hintText: isAnthropic
+            ? 'https://api.anthropic.com（留空即官方，也可填中转地址）'
+            : 'https://api.openai.com/v1（必填，可填兼容中转）',
+        border: const OutlineInputBorder(),
         isDense: true,
       ),
       onChanged: (v) => _save(cfg.copyWith(baseUrl: v.trim())),
     );
   }
 
-  Widget _modelRow(AiConfig cfg) {
+  /// ③ 模型名称：统一为自由文本输入（不再分裂成「下拉+自定义」两段）。
+  /// 占位提示列出该格式的常用 id；服务商切换时已自动落入该格式默认值。
+  Widget _modelField(AiConfig cfg) {
     final presets = _modelPresetsFor(cfg.provider);
-    final inPreset = presets.any((p) => p.$2 == cfg.model);
-    final value = (_showCustomModel || !inPreset) ? _kCustomModelValue : cfg.model;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        DropdownButton<String>(
-          isExpanded: true,
-          value: value,
-          items: [
-            for (final p in presets)
-              DropdownMenuItem(
-                value: p.$2,
-                child: Text(
-                  p.$3,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ),
-            const DropdownMenuItem(
-              value: _kCustomModelValue,
-              child: Text('自定义模型…', style: TextStyle(fontSize: 13)),
-            ),
-          ],
-          onChanged: (v) async {
-            if (v == null) return;
-            if (v == _kCustomModelValue) {
-              setState(() => _showCustomModel = true);
-              // 用户没改过输入框时，拿当前模型名兜底，保证 model 不落空
-              if (_modelCtrl.text.trim().isEmpty) {
-                await _save(cfg.copyWith(model: cfg.model));
-              }
-            } else {
-              setState(() => _showCustomModel = false);
-              _modelCtrl.text = v;
-              await _save(cfg.copyWith(model: v));
-            }
-          },
-        ),
-        if (_showCustomModel) ...[
-          const SizedBox(height: 8),
-          TextField(
-            controller: _modelCtrl,
-            decoration: const InputDecoration(
-              labelText: '自定义模型 ID',
-              hintText: '例如 claude-sonnet-5-5 / gpt-4o-mini',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-            onChanged: (v) {
-              final t = v.trim();
-              if (t.isNotEmpty) _save(cfg.copyWith(model: t));
-            },
-          ),
-        ],
-      ],
+    final examples =
+        presets.take(3).map((p) => p.$2).join(' / ');
+    return TextField(
+      controller: _modelCtrl,
+      decoration: InputDecoration(
+        labelText: '模型名称',
+        hintText: '例如 $examples',
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+      onChanged: (v) {
+        final t = v.trim();
+        if (t.isNotEmpty) _save(cfg.copyWith(model: t));
+      },
     );
   }
 
