@@ -1,0 +1,52 @@
+# 推送 main 自动构建 Flutter Web 并部署到 GitHub Pages
+# 访问地址：https://qushengxixiaoluo.github.io/lifesnap/
+name: Deploy Flutter Web
+
+on:
+  push:
+    branches: [main]
+  # 手动触发入口（Settings 页或 gh workflow run）
+  workflow_dispatch:
+
+# Pages 部署所需权限：读代码 + 写 Pages + 出身份令牌
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只允许一次部署，后推覆盖前推
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Flutter 稳定版（缓存加速后续运行）
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      # base-href 必须是 /lifesnap/：Pages 站点挂在仓库子路径下，
+      # 不加会导致资源 404 白屏
+      - run: flutter build web --release --base-href /lifesnap/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
