@@ -151,8 +151,9 @@ void main() {
     final headerTop = tester.getTopLeft(find.byIcon(Icons.chevron_left)).dy;
     expect(headerTop, greaterThanOrEqualTo(appbarBottom - 1));
     expect(headerTop, lessThanOrEqualTo(appbarBottom + 40));
+    // 标题带 ▾ 提示可点（点它弹年月跳转选择器）
     expect(
-      find.text('${now.year}年${now.month}月 · 拾光地图'),
+      find.text('${now.year}年${now.month}月 · 拾光地图　▾'),
       findsOneWidget,
     );
     expect(find.byType(SkyBackground), findsOneWidget, reason: '天空层打底');
@@ -194,7 +195,7 @@ void main() {
     await _pumpFor(tester);
     final next = _nextMonth(now.year, now.month);
     expect(
-      find.text('${next.$1}年${next.$2}月 · 拾光地图'),
+      find.text('${next.$1}年${next.$2}月 · 拾光地图　▾'),
       findsOneWidget,
       reason: '左滑后应切到下个月',
     );
@@ -203,7 +204,7 @@ void main() {
     // 6) 右滑 → 回到本月
     await tester.drag(find.byType(PageView), const Offset(600, 0));
     await _pumpFor(tester);
-    expect(find.text('${now.year}年${now.month}月 · 拾光地图'), findsOneWidget);
+    expect(find.text('${now.year}年${now.month}月 · 拾光地图　▾'), findsOneWidget);
 
     // 7) 点击节点 → 走 showDayDetail 契约（E 轨已交付：展开详情底部面板）
     // warnIfMissed: false —— 节点自己不参与命中（由 Rect 列表层统一命中），

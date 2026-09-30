@@ -2,11 +2,11 @@
 ///
 /// 布局按用户要求统一为「三件套」固定平铺，两种请求格式都常显：
 ///   ① API 地址（Anthropic 留空=官方；OpenAI 必填，可指中转）
-///   ② API Key（安全存储，保存后不回显）
-///   ③ 模型名称（自由文本，随格式切换给推荐默认值）
-/// 服务商两卡只决定**请求报文格式**（Messages API vs Chat Completions），
-/// 不再隐藏/显示字段。每次改动经 SettingsStore.saveAiConfig 落盘；
-/// key 只走 ApiKeyStore（不进明文偏好）。
+///   ② API Key（输入时遮蔽，保存后可一键显示/隐藏——用户要求能回显）
+///   ③ 模型名称（自由文本，占位提示常用 id）
+/// 外加显式「保存配置」按钮（用户要求：填完要有明确的保存动作）。
+/// 服务商两卡只决定请求报文格式，不再隐藏/显示字段，也不再显示技术提醒。
+/// 每次改动经 SettingsStore.saveAiConfig 落盘；key 只走 ApiKeyStore。
 library;
 
 import 'package:flutter/material.dart';
@@ -35,6 +35,12 @@ class _AiConfigSectionState extends State<AiConfigSection> {
   bool _testOk = false;
   String? _keyTip; // 「已保存 ✓」或错误文案
   String? _testMsg;
+  String? _saveTip; // 「保存配置」按钮的确认/报错文案
+
+  // key 回显（用户明确要求：保存后可以查看，不必永远藏起来）
+  String? _savedKey; // 已保存 key 的明文（仅内存，用于回显）
+  bool _savedKeyVisible = false; // 已保存 key 当前是否处于明文显示
+  bool _inputKeyVisible = false; // 输入框明文开关（输入时默认遮蔽）
 
   final _keyCtrl = TextEditingController();
   final _baseCtrl = TextEditingController();
@@ -56,14 +62,50 @@ class _AiConfigSectionState extends State<AiConfigSection> {
 
   Future<void> _load() async {
     final cfg = await SettingsStore.loadAiConfig();
-    final hasKey = await ApiKeyStore.exists();
+    final key = await ApiKeyStore.read(); // 存在才回显，没存读到 null
     if (!mounted) return;
     setState(() {
       _config = cfg;
-      _keyExists = hasKey;
+      _keyExists = key != null && key.isNotEmpty;
+      _savedKey = key;
       _baseCtrl.text = cfg.baseUrl;
       _modelCtrl.text = cfg.model;
     });
+  }
+
+  /// 遮蔽展示：保留末 4 位便于核对，其余用圆点。
+  String _maskKey(String? k) {
+    if (k == null || k.isEmpty) return '（未保存）';
+    if (k.length <= 8) return '•' * k.length;
+    return '${'•' * 12}${k.substring(k.length - 4)}';
+  }
+
+  /// 显式「保存配置」：冲刷两个输入框 + 顺带保存输入中的 Key。
+  /// （页面本身是即时落盘的，这个按钮是给用户一个明确的确认动作与校验入口。）
+  Future<void> _saveAll() async {
+    final cfg = _config;
+    if (cfg == null) return;
+    final model = _modelCtrl.text.trim();
+    if (model.isEmpty) {
+      setState(() => _saveTip = '模型名称不能为空');
+      return;
+    }
+    // 输入框里躺着未保存的 Key → 一并写入安全存储
+    final typedKey = _keyCtrl.text.trim();
+    if ((!_keyExists || _replacingKey) && typedKey.isNotEmpty) {
+      await ApiKeyStore.write(typedKey);
+      final fresh = await ApiKeyStore.read();
+      if (!mounted) return;
+      setState(() {
+        _keyExists = true;
+        _replacingKey = false;
+        _savedKey = fresh;
+        _keyCtrl.clear();
+      });
+    }
+    await _save(cfg.copyWith(baseUrl: _baseCtrl.text.trim(), model: model));
+    if (!mounted) return;
+    setState(() => _saveTip = '已保存 ✓');
   }
 
   List<(AiProviderKind, String, String)> _modelPresetsFor(AiProviderKind k) =>
@@ -84,16 +126,24 @@ class _AiConfigSectionState extends State<AiConfigSection> {
     final cfg = _config;
     if (cfg == null) return;
     var next = cfg.copyWith(provider: kind);
-    // 换平台后模型大概率不兼容（claude 不能打给 OpenAI），
-    // 自动落到新平台的默认模型，避免用户带病点「测试连接」；
-    // 模型名现在是自由文本，改完输入框同步显示。
-    final presets = _modelPresetsFor(kind);
-    if (!presets.any((p) => p.$2 == next.model)) {
-      next = next.copyWith(model: presets.first.$2);
+    // 只有「对方平台的官方默认模型」才自动替换（claude-xxx 切到 OpenAI 时换 gpt 默认）；
+    // 用户自己敲的自定义模型（如 mimo-v2.6-pro 中转）一律保留——
+    // 中转服务模型名和报文格式是两回事，不能因为切个格式就清掉用户输入。
+    const stockAnthropic = {'claude-opus-5-5', 'claude-sonnet-5-5'};
+    const stockOpenai = {'gpt-4o'};
+    final toReplace = kind == AiProviderKind.openai
+        ? stockAnthropic.contains(next.model)
+        : stockOpenai.contains(next.model);
+    if (toReplace) {
+      next = next.copyWith(model: _defaultModelFor(kind));
       _modelCtrl.text = next.model;
     }
     await _save(next);
   }
+
+  /// 该平台的默认模型（modelPresets 第一项）。
+  String _defaultModelFor(AiProviderKind kind) =>
+      _modelPresetsFor(kind).first.$2;
 
   // ------------------------------------------------------------ API Key
 
@@ -106,13 +156,16 @@ class _AiConfigSectionState extends State<AiConfigSection> {
     setState(() => _savingKey = true);
     try {
       await ApiKeyStore.write(raw);
+      final fresh = await ApiKeyStore.read();
       if (!mounted) return;
       setState(() {
         _savingKey = false;
         _keyExists = true;
         _replacingKey = false;
         _keyTip = '已保存 ✓';
-        _keyCtrl.clear(); // 不回显明文：明文只在输入过程中存在
+        _savedKey = fresh; // 保存后可回显（用户要求），默认仍遮蔽、眼睛开关切换
+        _savedKeyVisible = false;
+        _keyCtrl.clear();
       });
     } catch (e) {
       if (!mounted) return;
@@ -148,6 +201,8 @@ class _AiConfigSectionState extends State<AiConfigSection> {
       _keyExists = false;
       _replacingKey = false;
       _keyTip = null;
+      _savedKey = null;
+      _savedKeyVisible = false;
       _keyCtrl.clear();
     });
   }
@@ -238,6 +293,25 @@ class _AiConfigSectionState extends State<AiConfigSection> {
         // ③ 模型名称（自由文本，随格式切换给推荐默认）
         const SizedBox(height: 12),
         _modelField(cfg),
+        const SizedBox(height: 12),
+        // 显式保存（用户要求：填完 AI 配置要有明确的保存动作）
+        FilledButton.icon(
+          onPressed: _saveAll,
+          icon: const Icon(Icons.save_outlined, size: 18),
+          label: const Text('保存配置'),
+        ),
+        if (_saveTip != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            _saveTip!,
+            style: TextStyle(
+              fontSize: 13,
+              color: _saveTip == '已保存 ✓'
+                  ? ShiguangColors.leafDark
+                  : ShiguangColors.danger,
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         _testBlock(),
         const SizedBox(height: 16),
@@ -251,21 +325,11 @@ class _AiConfigSectionState extends State<AiConfigSection> {
     return Row(
       children: [
         Expanded(
-          child: _providerCard(
-            cfg,
-            AiProviderKind.anthropic,
-            'Anthropic',
-            '报文格式：Messages API',
-          ),
+          child: _providerCard(cfg, AiProviderKind.anthropic, 'Anthropic'),
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: _providerCard(
-            cfg,
-            AiProviderKind.openai,
-            'OpenAI 兼容',
-            '报文格式：Chat Completions',
-          ),
+          child: _providerCard(cfg, AiProviderKind.openai, 'OpenAI 兼容'),
         ),
       ],
     );
@@ -275,7 +339,6 @@ class _AiConfigSectionState extends State<AiConfigSection> {
     AiConfig cfg,
     AiProviderKind kind,
     String title,
-    String subtitle,
   ) {
     final selected = cfg.provider == kind;
     return Material(
@@ -315,8 +378,6 @@ class _AiConfigSectionState extends State<AiConfigSection> {
                         size: 16, color: ShiguangColors.leafDark),
                 ],
               ),
-              const SizedBox(height: 4),
-              Text(subtitle, style: const TextStyle(fontSize: 11)),
             ],
           ),
         ),
@@ -393,13 +454,25 @@ class _AiConfigSectionState extends State<AiConfigSection> {
                   color: ShiguangColors.leafDark),
               const SizedBox(width: 6),
               Expanded(
+                // 保存后允许回显（用户要求）：默认遮蔽留末 4 位，眼睛开关切换明文
                 child: Text(
-                  '已保存 ✓（不回显内容）',
+                  _savedKeyVisible ? (_savedKey ?? '') : _maskKey(_savedKey),
                   style: TextStyle(
                     fontSize: 13,
                     color: ShiguangColors.leafDark.withValues(alpha: 0.9),
                   ),
                 ),
+              ),
+              IconButton(
+                tooltip: _savedKeyVisible ? '隐藏 Key' : '显示 Key',
+                icon: Icon(
+                  _savedKeyVisible
+                      ? Icons.visibility_off
+                      : Icons.visibility,
+                  size: 18,
+                ),
+                onPressed: () =>
+                    setState(() => _savedKeyVisible = !_savedKeyVisible),
               ),
               TextButton(
                 onPressed: () => setState(() {
@@ -420,13 +493,24 @@ class _AiConfigSectionState extends State<AiConfigSection> {
               Expanded(
                 child: TextField(
                   controller: _keyCtrl,
-                  // 密码框：旁人瞥一眼屏幕也看不到明文
-                  obscureText: true,
+                  // 输入时默认遮蔽；眼睛开关可切明文（用户要求可展示）
+                  obscureText: !_inputKeyVisible,
                   decoration: InputDecoration(
                     labelText: 'API Key',
-                    hintText: _keyExists ? '输入新 Key 以替换旧值' : 'sk-…（仅本地加密保存）',
+                    hintText: _keyExists ? '输入新 Key 以替换旧值' : 'sk-… / tp-…（本地加密保存）',
                     border: const OutlineInputBorder(),
                     isDense: true,
+                    suffixIcon: IconButton(
+                      tooltip: _inputKeyVisible ? '隐藏' : '显示',
+                      icon: Icon(
+                        _inputKeyVisible
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                        size: 18,
+                      ),
+                      onPressed: () =>
+                          setState(() => _inputKeyVisible = !_inputKeyVisible),
+                    ),
                   ),
                 ),
               ),

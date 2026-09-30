@@ -27,6 +27,7 @@ import 'day_node.dart';
 import 'day_node_layout.dart';
 import 'map_path_painter.dart';
 import 'map_providers.dart';
+import 'month_jump_dialog.dart';
 
 /// 根路由页面（router '/' 依赖其类名与无参 const 构造，二者是不可变不变式）。
 ///
@@ -115,6 +116,20 @@ class _MapHomeState extends ConsumerState<_MapHome> {
     );
   }
 
+  /// 点头部月份标题 → 年月选择对话框 → 直接跳到目标月。
+  /// 跨年长距离跳转靠 animateToPage 滑过中间月份（观感是「翻地图」而非闪现）。
+  Future<void> _pickMonth() async {
+    final monthKey = ref.read(currentMonthProvider);
+    final picked = await MonthJumpDialog.show(
+      context,
+      initialYear: monthKey ~/ 100,
+    );
+    if (picked == null || !mounted) return;
+    final (year, month) = picked;
+    ref.read(currentMonthProvider.notifier).setMonth(year, month);
+    _goTo(monthToIndex(year, month));
+  }
+
   @override
   Widget build(BuildContext context) {
     final monthKey = ref.watch(currentMonthProvider);
@@ -162,6 +177,7 @@ class _MapHomeState extends ConsumerState<_MapHome> {
                     canNext: pageIndex < kMapMonthCount - 1,
                     onPrev: () => _goTo(pageIndex - 1),
                     onNext: () => _goTo(pageIndex + 1),
+                    onPickMonth: _pickMonth,
                   ),
                   Expanded(
                     // 地图层单独一层光栅：翻月/脉冲重绘不会牵动天空层。
@@ -205,6 +221,9 @@ class _MonthHeader extends StatelessWidget {
   final VoidCallback onPrev;
   final VoidCallback onNext;
 
+  /// 点标题弹年月选择器（直接跳转任意月份）。
+  final VoidCallback onPickMonth;
+
   const _MonthHeader({
     required this.year,
     required this.month,
@@ -212,6 +231,7 @@ class _MonthHeader extends StatelessWidget {
     required this.canNext,
     required this.onPrev,
     required this.onNext,
+    required this.onPickMonth,
   });
 
   @override
@@ -245,22 +265,34 @@ class _MonthHeader extends StatelessWidget {
               onPressed: onPrev,
             ),
             Expanded(
-              child: Text(
-                '$year年$month月 · 拾光地图',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800, // 粗体圆润（风格圣经第 8 条）
-                  letterSpacing: 1.1,
-                  color: CandyColors.outline,
-                  shadows: [
-                    // 细描边感用白影模拟：奶油底上描一圈白，字更「贴纸」。
-                    Shadow(
-                      color: CandyColors.glossWhite,
-                      offset: Offset(0, 1),
-                      blurRadius: 0,
+              // 点标题直接弹年月选择器跳转（不止左右翻月）
+              child: Semantics(
+                button: true,
+                label: '选择月份跳转',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: onPickMonth,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      '$year年$month月 · 拾光地图　▾',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800, // 粗体圆润（风格圣经第 8 条）
+                        letterSpacing: 1.1,
+                        color: CandyColors.outline,
+                        shadows: [
+                          // 细描边感用白影模拟：奶油底上描一圈白，字更「贴纸」。
+                          Shadow(
+                            color: CandyColors.glossWhite,
+                            offset: Offset(0, 1),
+                            blurRadius: 0,
+                          ),
+                        ],
+                      ),
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
