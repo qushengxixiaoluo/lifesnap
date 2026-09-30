@@ -3,6 +3,11 @@
          Android 13+（API 33）使用细粒度媒体权限 READ_MEDIA_IMAGES；其中
          READ_MEDIA_VISUAL_USER_SELECTED 支持 Android 14 的「部分照片访问」；
          12 及以下回退 READ_EXTERNAL_STORAGE（声明到 API 32 为止，13+ 会被系统忽略）。 -->
+    <!-- 互联网：Flutter 模板只在 debug/profile 清单里带，release 必须在此显式声明，
+         否则正式包所有网络请求（AI 测试连接/生成总结）直接 socket 失败，
+         界面报「网络连接失败」——手机 Release 踩过一次的坑。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
