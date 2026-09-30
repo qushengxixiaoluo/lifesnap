@@ -165,52 +165,61 @@ class _MapHomeState extends ConsumerState<_MapHome> {
         // 地图页不再保留第二处换肤 UI（见 git 历史中的 palette 按钮）。
       ),
       body: SkyBackground(
-        // 整层监听皮肤：换肤时路径发光色、文字色一起刷新，
+        // 整层监听天色 + 画风两根轴：换肤/换画风时路径发光色、文字色一起刷新，
         // 但节点布局仍从缓存秒出，不会重新抖动。
         child: ValueListenableBuilder<AppStyle>(
           valueListenable: AppStyleNotifier.current,
           builder: (context, style, _) {
-            return Padding(
-              // 为什么只用 padding.top 而不加 kToolbarHeight：
-              // 打开 extendBodyBehindAppBar 后，Scaffold 的 _BodyBuilder 会把
-              // body 的 MediaQuery.padding.top 直接抬到 AppBar 底边
-              // （max(状态栏, AppBar 实际高度)），再叠一次工具栏高度会凭空多出 56px 缝隙。
-              padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
-              child: Column(
-                children: [
-                  _MonthHeader(
-                    year: year,
-                    month: month,
-                    photoDays: photoDays,
-                    style: style,
-                    canPrev: pageIndex > 0,
-                    canNext: pageIndex < kMapMonthCount - 1,
-                    onPrev: () => _goTo(pageIndex - 1),
-                    onNext: () => _goTo(pageIndex + 1),
-                    onPickMonth: _pickMonth,
-                  ),
-                  Expanded(
-                    // 地图层单独一层光栅：翻月/脉冲重绘不会牵动天空层。
-                    child: RepaintBoundary(
-                      child: PageView.builder(
-                        controller: _pageController,
-                        itemCount: kMapMonthCount,
-                        onPageChanged: (i) =>
-                            ref.read(currentMonthProvider.notifier).setIndex(i),
-                        itemBuilder: (context, i) {
-                          final (y, m) = monthFromIndex(i);
-                          return _MapMonthView(
-                            year: y,
-                            month: m,
-                            style: style,
-                            openDay: widget.openDay,
-                          );
-                        },
+            return ValueListenableBuilder<ArtStyle>(
+              valueListenable: ArtStyleNotifier.current,
+              builder: (context, art, _) {
+                return Padding(
+                  // 为什么只用 padding.top 而不加 kToolbarHeight：
+                  // 打开 extendBodyBehindAppBar 后，Scaffold 的 _BodyBuilder 会把
+                  // body 的 MediaQuery.padding.top 直接抬到 AppBar 底边
+                  // （max(状态栏, AppBar 实际高度)），再叠一次工具栏高度会凭空多出 56px 缝隙。
+                  padding:
+                      EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
+                  child: Column(
+                    children: [
+                      _MonthHeader(
+                        year: year,
+                        month: month,
+                        photoDays: photoDays,
+                        style: style,
+                        art: art,
+                        canPrev: pageIndex > 0,
+                        canNext: pageIndex < kMapMonthCount - 1,
+                        onPrev: () => _goTo(pageIndex - 1),
+                        onNext: () => _goTo(pageIndex + 1),
+                        onPickMonth: _pickMonth,
                       ),
-                    ),
+                      Expanded(
+                        // 地图层单独一层光栅：翻月/脉冲重绘不会牵动天空层。
+                        child: RepaintBoundary(
+                          child: PageView.builder(
+                            controller: _pageController,
+                            itemCount: kMapMonthCount,
+                            onPageChanged: (i) => ref
+                                .read(currentMonthProvider.notifier)
+                                .setIndex(i),
+                            itemBuilder: (context, i) {
+                              final (y, m) = monthFromIndex(i);
+                              return _MapMonthView(
+                                year: y,
+                                month: m,
+                                style: style,
+                                art: art,
+                                openDay: widget.openDay,
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                );
+              },
             );
           },
         ),
@@ -233,6 +242,9 @@ class _MonthHeader extends StatelessWidget {
   /// 当前皮肤（副行文字/光晕色随皮肤走，保证任何天空下可读）。
   final AppStyle style;
 
+  /// 当前画风（旧纸卡上副行走墨/淡纸字，糖果卡沿用原描边白）。
+  final ArtStyle art;
+
   final bool canPrev;
   final bool canNext;
   final VoidCallback onPrev;
@@ -246,6 +258,7 @@ class _MonthHeader extends StatelessWidget {
     required this.month,
     required this.photoDays,
     required this.style,
+    required this.art,
     required this.canPrev,
     required this.canNext,
     required this.onPrev,
@@ -255,11 +268,14 @@ class _MonthHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 副行配色随皮肤：日间/黄昏用墨棕压白光晕，星夜用纸白压暗光晕——
-    // 副行浮在天空上（不在奶油胶囊里），两套反差都要保证可读。
+    // 副行配色随「天色 × 画风」走，且浮在天空上（不在奶油胶囊里）：
+    // - 糖果：日间/黄昏用糖果棕压白光晕，星夜用纯白压暗光晕（既有观感不动）；
+    // - 油墨旧纸：直接用画风矩阵的文字色——白天纸上墨字，夜里暗纸淡字，
+    //   否则纯白字会把「泛黄信纸」读成「贴纸」。
     final lightSkin = style != AppStyle.night;
-    final statColor =
-        lightSkin ? CandyColors.outline : CandyColors.glossWhite;
+    final statColor = art == ArtStyle.agedInk
+        ? textColorFor(style, art)
+        : (lightSkin ? CandyColors.outline : CandyColors.glossWhite);
     final statShadow =
         lightSkin ? Colors.white.withValues(alpha: 0.85) : Colors.black.withValues(alpha: 0.5);
     return Padding(
@@ -400,6 +416,7 @@ class _MapMonthView extends ConsumerStatefulWidget {
   final int year;
   final int month;
   final AppStyle style;
+  final ArtStyle art; // 画风透传给路径层：雾罩光晕色随画风走，shouldRepaint 才能感知
 
   /// 打开某日详情（透传 [CalendarMapPage] 绑定的外层 context 回调）。
   final ValueChanged<int> openDay;
@@ -408,6 +425,7 @@ class _MapMonthView extends ConsumerStatefulWidget {
     required this.year,
     required this.month,
     required this.style,
+    required this.art,
     required this.openDay,
   });
 
@@ -482,6 +500,7 @@ class _MapMonthViewState extends ConsumerState<_MapMonthView> {
                     nodes: positions,
                     statuses: statuses,
                     style: widget.style,
+                    art: widget.art,
                   ),
                 ),
               ),

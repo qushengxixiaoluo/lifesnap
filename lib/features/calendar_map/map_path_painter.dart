@@ -45,10 +45,15 @@ class MapPathPainter extends CustomPainter {
   /// 换肤后 shouldRepaint 靠它感知（见 [shouldRepaint]）。
   final AppStyle style;
 
+  /// 当前画风：雾罩色温同样跟「天色 × 画风」的光晕走——
+  /// 只带 style 不带 art 的话，旧纸↔糖果切换时光晕变了却判「不用重绘」。
+  final ArtStyle art;
+
   MapPathPainter({
     required this.nodes,
     required this.statuses,
     required this.style,
+    required this.art,
   });
 
   /// 段 i 连接节点 i → i+1，取**较早**节点的状态：
@@ -219,10 +224,10 @@ class MapPathPainter extends CustomPainter {
     _drawDashed(canvas, path, dots, 3, 11);
   }
 
-  /// 雾的卡通配色：日间/黄昏偏暖白、星夜偏月光蓝——跟当前皮肤的
-  /// 天空辉光色插值一档，换肤后锁定段不显得「色温脱轨」。
+  /// 雾的卡通配色：日间/黄昏偏暖白、星夜偏月光蓝——跟「天色 × 画风」
+  /// 的天空辉光色插值一档，换肤/换画风后锁定段不显得「色温脱轨」。
   Color _fogColor() {
-    final glow = skyOf(style).glow;
+    final glow = tokensFor(style, art).glow;
     return Color.lerp(CandyColors.mist, glow, 0.35)!;
   }
 
@@ -250,7 +255,8 @@ class MapPathPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(MapPathPainter old) {
-    if (old.style != style) return true; // 换肤 → 雾罩色温变化
+    if (old.style != style) return true; // 换天色 → 雾罩色温变化
+    if (old.art != art) return true; // 换画风 → 同一档天色的光晕也不同
     if (old.nodes.length != nodes.length) return true;
     if (old.statuses.length != statuses.length) return true;
     // 布局来自缓存：同月同尺寸是同一批实例，identity 比较几乎零成本。

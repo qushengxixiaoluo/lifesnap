@@ -1,11 +1,13 @@
-/// ThemeData 工厂（A 轨交付版：组件级排版 + 星夜对比度适配）。
+/// ThemeData 工厂（A 轨交付版：组件级排版 + 星夜对比度适配 + 画风轴）。
 ///
 /// 约定：
-/// 1) 所有会随皮肤变化的值一律由 AppStyle 推导（沿 interview_calendar 约定）；
+/// 1) 所有会随「天色 × 画风」变化的值一律由 tokensFor/textColorFor 推导；
 /// 2) 层次一律用「纸色深浅 + 手绘描边」表达——所有组件 elevation: 0，
 ///    禁止 Material 默认阴影营造层次（画风是平涂手绘，不是拟物投影）；
 /// 3) 星夜适配：纸面转墨蓝、主色反转为「暖纸金底 + 深墨字」，
-///    保证深色环境下按钮/文字对比度依然 ≥ 4.5:1 的方向。
+///    保证深色环境下按钮/文字对比度依然 ≥ 4.5:1 的方向；
+/// 4) 油墨旧纸适配：结构色直接取该档天色的三段「旧纸」渐变，
+///    组件底色与天空同出一张纸（不会天是旧纸、卡片却是水彩纸）。
 library;
 
 import 'package:flutter/material.dart';
@@ -15,49 +17,109 @@ import 'app_style.dart';
 class AppTheme {
   AppTheme._();
 
-  /// 由皮肤构建完整主题。签名是契约：main.dart 与各页面依赖此函数。
-  static ThemeData build(AppStyle style) {
+  /// 由「天色 × 画风」构建完整主题。签名是契约：main.dart 与各页面依赖此函数。
+  ///
+  /// [art] 缺省读全局 [ArtStyleNotifier.current]：既有单参调用点
+  /// （金样张等）零改动拿到当前画风；测试可显式传入矩阵中的任意组合。
+  static ThemeData build(AppStyle style, {ArtStyle? art}) {
+    final artStyle = art ?? ArtStyleNotifier.current.value;
     final isNight = style == AppStyle.night;
-    final sky = skyOf(style);
-    final text = textColorOf(style);
+    final isAged = artStyle == ArtStyle.agedInk;
+    final sky = tokensFor(style, artStyle);
+    final text = textColorFor(style, artStyle);
     // 次级文字：星夜下纸白压到 72% 仍足够亮，日间墨棕 62% 做弱化层
     final subtleText = text.withValues(alpha: isNight ? 0.72 : 0.62);
 
-    // 结构底色：星夜转深墨蓝，避免亮纸在夜里刺眼
-    final bg = isNight ? const Color(0xFF1A2138) : ShiguangColors.paper;
-    // 抬升面（对话框/菜单/底表）：星夜亮一档，日间水彩纸
-    final elevated = isNight ? const Color(0xFF253054) : ShiguangColors.paper;
-    // 输入框底：星夜压深一档便于识别可输入区，日间用纸影色
-    final inputFill = isNight
-        ? const Color(0xFF141B31)
-        : ShiguangColors.paperDeep.withValues(alpha: 0.55);
+    // —— 结构底色 ——
+    // 糖果：星夜转深墨蓝、日间水彩纸（观感不得回退）；
+    // 油墨旧纸：直接取本档天色的三段纸渐变——top 最深（受潮）、mid 是纸面、
+    // horizon 最浅（边角），于是卡片/对话框/输入框与天空同源同纸。
+    final bg =
+        isAged ? sky.mid : (isNight ? const Color(0xFF1A2138) : ShiguangColors.paper);
+    // 抬升面（对话框/菜单/底表）：夜里亮一档、日间浅一档，始终比 bg 好分辨
+    final elevated = isAged
+        ? sky.horizon
+        : (isNight ? const Color(0xFF253054) : ShiguangColors.paper);
+    // 输入框底：旧纸取最深的受潮块；糖果星夜压深一档、日间用纸影色
+    final inputFill = isAged
+        ? sky.top
+        : (isNight
+            ? const Color(0xFF141B31)
+            : ShiguangColors.paperDeep.withValues(alpha: 0.55));
 
-    // 主色策略：日间墨棕底配纸白字；星夜反过来用暖纸金底配深墨字——
+    // 主色策略：糖果日间墨棕底配纸白字，星夜反转成暖纸金底配深墨字；
+    // 旧纸白天用墨色按钮配浅纸字，夜里反过来用淡纸色按钮配墨字——
     // 深色环境里深棕按钮会沉进背景，必须把按钮点亮才点得动
-    final primary = isNight ? const Color(0xFFE9C9A0) : ShiguangColors.inkBrown;
-    final onPrimary = isNight ? const Color(0xFF2B2216) : ShiguangColors.paper;
-    final secondary = isNight ? const Color(0xFF93C48C) : ShiguangColors.leafDark;
-    final onSecondary = isNight ? const Color(0xFF16220F) : ShiguangColors.paper;
-    final outline = isNight
-        ? ShiguangColors.paper.withValues(alpha: 0.30)
-        : ShiguangColors.wood.withValues(alpha: 0.55);
-    final dividerC = isNight
-        ? ShiguangColors.paper.withValues(alpha: 0.16)
-        : ShiguangColors.wood.withValues(alpha: 0.30);
+    final primary = isAged
+        ? (isNight
+            ? ShiguangColors.agedPaperText
+            : ShiguangColors.agedInkText)
+        : (isNight ? const Color(0xFFE9C9A0) : ShiguangColors.inkBrown);
+    final onPrimary = isAged
+        ? (isNight ? sky.top : sky.horizon)
+        : (isNight ? const Color(0xFF2B2216) : ShiguangColors.paper);
+    // 强调色：糖果用叶绿；旧纸用朱砂——旧信纸上唯一允许跳出来的颜色
+    final secondary = isAged
+        ? (isNight
+            ? ShiguangColors.cinnabarBright
+            : ShiguangColors.cinnabar)
+        : (isNight ? const Color(0xFF93C48C) : ShiguangColors.leafDark);
+    final onSecondary = isAged
+        ? (isNight ? sky.top : sky.horizon)
+        : (isNight ? const Color(0xFF16220F) : ShiguangColors.paper);
+    final outline = isAged
+        ? (isNight
+            ? ShiguangColors.agedPaperText.withValues(alpha: 0.30)
+            : ShiguangColors.agedInkText.withValues(alpha: 0.45))
+        : (isNight
+            ? ShiguangColors.paper.withValues(alpha: 0.30)
+            : ShiguangColors.wood.withValues(alpha: 0.55));
+    final dividerC = isAged
+        ? (isNight
+            ? ShiguangColors.agedPaperText.withValues(alpha: 0.16)
+            : ShiguangColors.agedInkText.withValues(alpha: 0.28))
+        : (isNight
+            ? ShiguangColors.paper.withValues(alpha: 0.16)
+            : ShiguangColors.wood.withValues(alpha: 0.30));
+
+    // 油墨旧纸的容器色阶：旧纸三段色本身就是一条「深→浅」的纸纹坡，
+    // 按亮/暗主题各排一次，保证列表/菜单层层可分（糖果仍走原靛蓝/纸色阶）。
+    final containerLowest = isAged
+        ? (isNight
+            ? sky.top
+            : Color.lerp(sky.horizon, const Color(0xFFFFFFFF), 0.4)!)
+        : (isNight ? const Color(0xFF0F1530) : const Color(0xFFFAF5EA));
+    final containerHigh = isAged
+        ? (isNight
+            ? Color.lerp(sky.horizon, const Color(0xFFFFFFFF), 0.07)!
+            : sky.mid)
+        : (isNight ? const Color(0xFF2A3560) : ShiguangColors.paperDeep);
+    final containerHighest = isAged
+        ? (isNight
+            ? Color.lerp(sky.horizon, const Color(0xFFFFFFFF), 0.14)!
+            : sky.top)
+        : sky.horizon; // 糖果：借用天空地平线色（日间暖奶油、星夜靛蓝）
 
     final colorScheme = ColorScheme(
+      // 暗墨夜读与糖果星夜一样走深色：底色是深墨褐纸，组件必须按暗色系排
       brightness: isNight ? Brightness.dark : Brightness.light,
       primary: primary,
       onPrimary: onPrimary,
-      primaryContainer: isNight
-          ? const Color(0xFF3A4468)
-          : ShiguangColors.paperDeep,
+      primaryContainer: isAged
+          ? (isNight
+              ? Color.lerp(sky.horizon, const Color(0xFFFFFFFF), 0.10)!
+              : sky.top)
+          : (isNight
+              ? const Color(0xFF3A4468)
+              : ShiguangColors.paperDeep),
       onPrimaryContainer: text,
       secondary: secondary,
       onSecondary: onSecondary,
-      secondaryContainer: isNight
-          ? const Color(0xFF2E4033)
-          : ShiguangColors.leafDark.withValues(alpha: 0.18),
+      secondaryContainer: isAged
+          ? secondary.withValues(alpha: isNight ? 0.30 : 0.18)
+          : (isNight
+              ? const Color(0xFF2E4033)
+              : ShiguangColors.leafDark.withValues(alpha: 0.18)),
       onSecondaryContainer: text,
       error: ShiguangColors.danger,
       onError: ShiguangColors.paper,
@@ -66,22 +128,39 @@ class AppTheme {
       surface: bg,
       onSurface: text,
       onSurfaceVariant: subtleText,
-      surfaceDim: isNight ? const Color(0xFF111732) : ShiguangColors.paperDeep,
-      surfaceBright: isNight ? elevated : const Color(0xFFFBF6EA),
-      surfaceContainerLowest:
-          isNight ? const Color(0xFF0F1530) : const Color(0xFFFAF5EA),
-      surfaceContainerLow:
-          isNight ? const Color(0xFF1C2545) : ShiguangColors.paper,
-      surfaceContainer: isNight ? const Color(0xFF232D50) : elevated,
-      surfaceContainerHigh:
-          isNight ? const Color(0xFF2A3560) : ShiguangColors.paperDeep,
-      // 最高层容器借用天空地平线色：日间暖奶油、星夜靛蓝，都是「有色纸」
-      surfaceContainerHighest: sky.horizon,
+      surfaceDim: isAged
+          ? sky.top
+          : (isNight ? const Color(0xFF111732) : ShiguangColors.paperDeep),
+      surfaceBright: isAged
+          ? sky.horizon
+          : (isNight ? elevated : const Color(0xFFFBF6EA)),
+      surfaceContainerLowest: containerLowest,
+      surfaceContainerLow: isAged
+          ? (isNight ? sky.mid : sky.horizon)
+          : (isNight ? const Color(0xFF1C2545) : ShiguangColors.paper),
+      surfaceContainer: isAged || !isNight ? elevated : const Color(0xFF232D50),
+      surfaceContainerHigh: containerHigh,
+      surfaceContainerHighest: containerHighest,
       outline: outline,
       outlineVariant: dividerC,
-      inverseSurface: isNight ? ShiguangColors.paper : ShiguangColors.inkBrown,
-      onInverseSurface: isNight ? ShiguangColors.inkBrown : ShiguangColors.paper,
-      inversePrimary: ShiguangColors.leafDark,
+      // 反相面：糖果星夜是「亮纸压暗字」，旧纸夜读同样要一张浅纸反相过来
+      inverseSurface: isAged
+          ? (isNight
+              ? ShiguangColors.agedPaperText
+              : ShiguangColors.agedInkText)
+          : (isNight ? ShiguangColors.paper : ShiguangColors.inkBrown),
+      onInverseSurface: isAged
+          ? (isNight
+              ? ShiguangColors.agedInkText
+              : sky.horizon)
+          : (isNight
+              ? ShiguangColors.inkBrown
+              : ShiguangColors.paper),
+      inversePrimary: isAged
+          ? (isNight
+              ? ShiguangColors.cinnabar
+              : ShiguangColors.cinnabarBright)
+          : ShiguangColors.leafDark,
       shadow: Colors.black,
       scrim: Colors.black.withValues(alpha: 0.45),
     );
@@ -292,8 +371,15 @@ class AppTheme {
 
       // —— 轻反馈 / 状态 ——
       snackBarTheme: SnackBarThemeData(
-        // 深棕条在日间像墨签，星夜换成亮靛以免黑上加黑
-        backgroundColor: isNight ? const Color(0xFF2E3A5E) : ShiguangColors.inkBrown,
+        // 深棕条在日间像墨签，星夜换成亮靛以免黑上加黑；
+        // 旧纸夜里改用「比纸面亮一档的褐色」——靛蓝压在旧纸上会色温脱轨
+        backgroundColor: isAged
+            ? (isNight
+                ? const Color(0xFF4A3B29)
+                : ShiguangColors.agedInkText)
+            : (isNight
+                ? const Color(0xFF2E3A5E)
+                : ShiguangColors.inkBrown),
         contentTextStyle: textTheme.bodyMedium?.copyWith(
           color: ShiguangColors.paper,
         ),

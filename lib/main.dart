@@ -1,8 +1,9 @@
 /// 拾光手册 · 应用入口
 ///
 /// 结构沿 interview_calendar / Emotion 先例：
-/// - 根级 `ValueListenableBuilder<AppStyle>` 换肤（主题变化不经过状态管理包）
-/// - SharedPreferences 持久化皮肤
+/// - 根级 `ValueListenableBuilder<AppStyle>` 换天色、内层再监听
+///   `ArtStyleNotifier.current` 换画风（两轴任一变化都整树重建主题）
+/// - SharedPreferences 分键持久化天色（skinMode）与画风（artMode）
 /// - flutter_localizations 中文 Material 组件
 library;
 
@@ -23,7 +24,9 @@ import 'core/storage/photo_index_store.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
+  // 两轴分键加载，互不覆盖：skinMode 恢复天色、artMode 恢复画风
   await AppStyleNotifier.load(prefs);
+  await ArtStyleNotifier.load(prefs);
 
   // 阶段 2 集成：全应用唯一 store 实例——
   // photoStoreProvider 用 override 指向它（UI 数据源），
@@ -47,26 +50,32 @@ class ShiguangApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 皮肤是全局令牌：用 ValueListenable 独立于 Riverpod，换肤即整树重建主题
+    // 天色与画风都是全局令牌：用 ValueListenable 独立于 Riverpod，
+    // 两轴任一变化即整树重建主题（画风是第二根轴，不是天色的第四个值）
     return ValueListenableBuilder<AppStyle>(
       valueListenable: AppStyleNotifier.current,
       builder: (context, style, _) {
-        return MaterialApp(
-          title: '拾光手册',
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.build(style),
-          locale: const Locale('zh', 'CN'),
-          supportedLocales: const [Locale('zh', 'CN')],
-          localizationsDelegates: const [
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          routes: AppRoutes.routes,
-          initialRoute: AppRoutes.home,
-          // 每次启动检查落盘的批量残队：上次没跑完的「补全缺失总结」
-          // 在这里自动续跑（用户要求：退出软件后从头到尾仍要补完）。
-          builder: (context, child) => _BatchAutoResume(child: child),
+        return ValueListenableBuilder<ArtStyle>(
+          valueListenable: ArtStyleNotifier.current,
+          builder: (context, art, _) {
+            return MaterialApp(
+              title: '拾光手册',
+              debugShowCheckedModeBanner: false,
+              theme: AppTheme.build(style, art: art),
+              locale: const Locale('zh', 'CN'),
+              supportedLocales: const [Locale('zh', 'CN')],
+              localizationsDelegates: const [
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              routes: AppRoutes.routes,
+              initialRoute: AppRoutes.home,
+              // 每次启动检查落盘的批量残队：上次没跑完的「补全缺失总结」
+              // 在这里自动续跑（用户要求：退出软件后从头到尾仍要补完）。
+              builder: (context, child) => _BatchAutoResume(child: child),
+            );
+          },
         );
       },
     );
