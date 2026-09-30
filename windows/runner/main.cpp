@@ -27,7 +27,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"shiguang_handbook", origin, size)) {
+  // 窗口标题「拾光手册」（U+62FE U+5149 U+624B U+518C）：
+  // 用 \u 转义写死，避免 MSVC 按本地代码页解读源文件导致乱码
+  if (!window.Create(L"拾光手册", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

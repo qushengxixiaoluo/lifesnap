@@ -47,20 +47,42 @@ class GalleryScanner implements PhotoSourceScanner {
 
     yield const ScanProgress(phase: ScanPhase.listing);
 
-    // 权限流：requestPermissionExtend 一次完成 询问/跳转设置/返回状态 的闭环
-    final permission = await PhotoManager.requestPermissionExtend();
+    // 权限流：requestPermissionExtend 一次完成 询问/跳转设置/返回状态 的闭环。
+    // 已知坑：国产 ROM（MIUI/ColorOS 等）从系统设置授权后返回应用，
+    // photo_manager 的权限状态往往还停在旧值——所以首次读到「无权限」时
+    // 不立刻判死，等一拍重查一次再下结论。
+    var permission = await PhotoManager.requestPermissionExtend();
     if (!permission.hasAccess) {
-      yield const ScanProgress(
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      permission = await PhotoManager.requestPermissionExtend();
+    }
+    if (!permission.hasAccess) {
+      yield ScanProgress(
         phase: ScanPhase.error,
-        errorMessage: '相册权限被拒绝，请在系统设置中允许访问照片',
+        errorMessage:
+            '相册权限未生效。请到 系统设置→应用→拾光手册→权限 允许「照片和视频」，'
+            '若选了「仅选定的照片」请选择全部；授权后完全关闭本应用再重新打开扫描。'
+            '（当前状态：${permission.name}）',
       );
       return;
     }
 
-    final albums = await PhotoManager.getAssetPathList(
-      type: RequestType.image,
-      onlyAll: true, // 只要「最近项目」全量视图，避免遍历每个相册造成重复
-    );
+    // 权限之后的查询也可能抛 PermissionException（部分 ROM 授权瞬间查询会炸），
+    // 统一兜底成中文可操作提示，而不是把原始异常甩给用户
+    final List<AssetPathEntity> albums;
+    try {
+      albums = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        onlyAll: true, // 只要「最近项目」全量视图，避免遍历每个相册造成重复
+      );
+    } catch (e) {
+      yield ScanProgress(
+        phase: ScanPhase.error,
+        errorMessage: '读取相册列表失败（$e）。请完全退出应用后重试；'
+            '若仍失败，检查系统设置中是否授予了「照片和视频」权限。',
+      );
+      return;
+    }
     if (albums.isEmpty) {
       yield const ScanProgress(phase: ScanPhase.done);
       return;
