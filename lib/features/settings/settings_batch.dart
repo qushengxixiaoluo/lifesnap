@@ -1,19 +1,18 @@
-/// 设置页 · 批量生成分区（E 轨）。
+/// 设置页 · 批量生成分区。
 ///
-/// 选月份 → 「生成本月全部总结」→ generateMonth 进度流（x/N）→
-/// 失败天列表，逐天可重试。
-///
-/// 失败天怎么推断：MonthBatchProgress 只带聚合计数（total/done/failed）
-/// 和「当前处理日」，没有失败明细，所以 failed 计数涨一格时，
-/// 就把那一刻的 currentDayKey 记为失败日——这是流里能拿到的最接近信息。
+/// 两个入口都跑在全局 [batchServiceProvider] 里（任务不属于本页面）：
+/// - 「补全所有缺失总结」：全库有照片但没有 AI 总结的日子，从早到晚跑到底；
+/// - 「生成本月全部总结」：只补所选月份（沿用原入口）。
+/// 退出本页面/切后台任务照跑；中途杀掉 App，下次启动 main 的
+/// _BatchAutoResume 钩子自动续跑（进度与失败明细都持久化）。
+/// 本组件只 watch 服务状态做展示 + 单天重试的本地 UI 态。
 library;
-
-import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/app_style.dart';
+import '../../app/batch_service.dart';
 import '../../app/providers.dart';
 import '../../core/ai/ai_provider.dart';
 import '../../core/models/models.dart';
@@ -29,96 +28,31 @@ class BatchSection extends ConsumerStatefulWidget {
 class _BatchSectionState extends ConsumerState<BatchSection> {
   late int _year;
   late int _month;
-  bool _running = false;
-  MonthBatchProgress? _progress;
-  String? _error;
-  final _failed = <int>[]; // 推断出的失败日 dayKey
+
+  /// 上次点的是「单月」还是「全部」——空队列完成时的文案要分场合。
+  bool _lastWasMonth = true;
+
+  // 单天重试的本地 UI 态（任务态在 batchServiceProvider 里）
   final _retrying = <int>{};
   final _retryError = <int, String>{};
-  StreamSubscription<MonthBatchProgress>? _sub;
 
   @override
   void initState() {
     super.initState();
     final now = DateTime.now();
-    _year = now.year; // 默认当月：多数人是补当月的漏
+    _year = now.year;
     _month = now.month;
   }
 
-  @override
-  void dispose() {
-    _sub?.cancel();
-    super.dispose();
-  }
-
-  void _start() {
-    _sub?.cancel();
-    setState(() {
-      _running = true;
-      _progress = null;
-      _error = null;
-      _failed.clear();
-      _retryError.clear();
-    });
-    var prevFailed = 0;
-    _sub = ref
-        .read(summaryRepositoryProvider)
-        .generateMonth(year: _year, month: _month)
-        .listen(
-      (p) {
-        if (!mounted) return;
-        if (p.failed > prevFailed) {
-          prevFailed = p.failed;
-          if (p.currentDayKey != 0 && !_failed.contains(p.currentDayKey)) {
-            _failed.add(p.currentDayKey);
-          }
-        }
-        setState(() {
-          _progress = p;
-          if (p.finished) _running = false;
-        });
-        if (p.finished) _sub?.cancel();
-      },
-      onError: (Object e) {
-        if (!mounted) return;
-        setState(() {
-          _running = false;
-          _error = e is AiException ? e.message : '批量生成失败：$e';
-        });
-      },
-      onDone: () {
-        if (!mounted) return;
-        setState(() => _running = false);
-      },
-    );
-  }
-
-  /// 单天重试：自己组 DayRecord 再调 generate(force:true)。
-  /// 不整月重跑——重跑会把已成功的天再过一遍，浪费请求。
   Future<void> _retryDay(int dayKey) async {
-    final store = ref.read(photoStoreProvider).value;
-    if (store == null) return;
-    final repo = ref.read(summaryRepositoryProvider);
     setState(() {
       _retrying.add(dayKey);
       _retryError.remove(dayKey);
     });
     try {
-      final photos = await store.photosOfDay(dayKey);
-      final summary = await store.summaryOf(dayKey);
-      final record = DayRecord(
-        dayKey: dayKey,
-        photos: photos,
-        summary: summary,
-        summaryStale: summary != null &&
-            summary.photoSig != computePhotoSig(photos),
-      );
-      await repo.generate(record: record, force: true);
+      await ref.read(batchServiceProvider.notifier).retryDay(dayKey);
       if (!mounted) return;
-      setState(() {
-        _failed.remove(dayKey);
-        _retrying.remove(dayKey);
-      });
+      setState(() => _retrying.remove(dayKey));
     } on AiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -135,13 +69,7 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
   }
 
   /// 年份下拉的动态区间：库里最早照片的年份 → 当前年。
-  ///
-  /// 不能写死固定几年（如 [2024..2028]）：那样 2023 及更早的照片永远
-  /// 没法批量补总结，2029 年起又只剩兜底分支。改为从 dayIndex 的
-  /// dayKey（yyyymmdd，高四位即年份）反推最早年份，跨年后自动延展。
-  ///
-  /// 库里还没照片（或 store 仍在加载）时退回「当前年起往前推 4 年」的
-  /// 窗口——同样随系统时间滚动，不会像写死列表那样过期。
+  /// 库里没照片时退回「当前年起往前推 4 年」的滚动窗口。
   List<int> _yearOptions() {
     final now = DateTime.now().year;
     final dayIndex = ref.watch(photoStoreProvider).value?.dayIndex;
@@ -153,15 +81,13 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
       }
     }
     final from = minYear ?? now - 4;
-    // 降序排列：最常用的当前年排最上，老照片年份往下滑
     final years = <int>[
       for (var y = (minYear != null && minYear > now ? minYear : now);
           y >= from;
           y--)
         y,
     ];
-    // 当前选中年不在区间内也补回去：DropdownButton 断言 value 必须有对应
-    // item（测试里可注入任意年），缺了会直接崩。
+    // DropdownButton 断言 value 必须有对应 item（测试可注入任意年），缺了会崩
     if (!years.contains(_year)) years.add(_year);
     return years;
   }
@@ -170,13 +96,37 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final years = _yearOptions();
+    final job = ref.watch(batchServiceProvider);
+    final notifier = ref.read(batchServiceProvider.notifier);
+    final running = job.running;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         sectionTitle(context, Icons.calendar_month_outlined, '批量生成',
-            subtitle: '给整个月份补齐缺失的 AI 总结'),
+            subtitle: '补全所有有照片、缺 AI 总结的日子'),
         const SizedBox(height: 12),
+
+        // —— 主入口：全库从头补到尾 ——
+        FilledButton.icon(
+          onPressed: running
+              ? null
+              : () {
+                  _lastWasMonth = false;
+                  notifier.startAll();
+                },
+          icon: running
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.auto_awesome_outlined, size: 18),
+          label: Text(running ? '生成中…' : '补全所有缺失总结'),
+        ),
+
+        // —— 次入口：单月（保留原按钮文案，测试与老用户习惯都认它）——
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -187,9 +137,8 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
                   for (final y in years)
                     DropdownMenuItem(value: y, child: Text('$y 年')),
                 ],
-                onChanged: _running
-                    ? null
-                    : (v) => setState(() => _year = v ?? _year),
+                onChanged:
+                    running ? null : (v) => setState(() => _year = v ?? _year),
               ),
             ),
             const SizedBox(width: 8),
@@ -201,7 +150,7 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
                   for (var m = 1; m <= 12; m++)
                     DropdownMenuItem(value: m, child: Text('$m 月')),
                 ],
-                onChanged: _running
+                onChanged: running
                     ? null
                     : (v) => setState(() => _month = v ?? _month),
               ),
@@ -209,53 +158,87 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
           ],
         ),
         const SizedBox(height: 8),
-        FilledButton.icon(
-          onPressed: _running ? null : _start,
-          icon: _running
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.auto_awesome_outlined, size: 18),
-          label: Text(_running ? '生成中…' : '生成本月全部总结'),
+        OutlinedButton.icon(
+          onPressed: running
+              ? null
+              : () {
+                  _lastWasMonth = true;
+                  notifier.startMonth(_year, _month);
+                },
+          icon: const Icon(Icons.event_note_outlined, size: 18),
+          label: const Text('生成本月全部总结'),
         ),
-        if (_error != null) ...[
+
+        // —— 运行控制与残队提示 ——
+        if (running) ...[
           const SizedBox(height: 8),
-          Text(_error!,
-              style:
-                  const TextStyle(color: ShiguangColors.danger, fontSize: 13)),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: notifier.requestStop,
+              icon: const Icon(Icons.stop_circle_outlined, size: 18),
+              label: const Text('停止（当前天跑完即收工，进度已保留）'),
+            ),
+          ),
+        ] else if (job.hasPending) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: notifier.resumeIfPending,
+              icon: const Icon(Icons.play_circle_outline, size: 18),
+              label: Text('继续上次未完成（剩 ${job.total - job.done} 天）'),
+            ),
+          ),
         ],
-        ..._progressBlock(theme),
+
+        if (job.abortedReason != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            '任务中止：${job.abortedReason}（队列已保留，修好后重开应用或点上方继续）',
+            style: const TextStyle(color: ShiguangColors.danger, fontSize: 13),
+          ),
+        ],
+
+        ..._progressBlock(theme, job),
       ],
     );
   }
 
-  List<Widget> _progressBlock(ThemeData theme) {
-    final p = _progress;
-    if (p == null) return const [];
-    final total = p.done + p.failed;
+  List<Widget> _progressBlock(ThemeData theme, BatchJobState job) {
+    if (!job.running && !job.finished && job.failedDays.isEmpty) {
+      return const [];
+    }
+    final total = job.done + job.failed;
     final out = <Widget>[
       const SizedBox(height: 12),
       LinearProgressIndicator(
-        value: p.total == 0 ? null : total / p.total,
+        value: job.total == 0 ? null : total / job.total,
         minHeight: 6,
         borderRadius: BorderRadius.circular(4),
       ),
       const SizedBox(height: 6),
       Text(
-        p.total == 0
-            ? '本月没有需要生成的总结'
-            : '进度 ${p.done}/${p.total}${p.failed > 0 ? ' · 失败 ${p.failed}' : ''}',
+        job.total == 0
+            ? (_lastWasMonth ? '本月没有需要生成的总结' : '没有缺失的总结，全部已补齐')
+            : '进度 ${job.done}/${job.total}${job.failed > 0 ? ' · 失败 ${job.failed}' : ''}',
         style: theme.textTheme.bodySmall,
       ),
-      if (!p.finished && p.currentDayKey != 0)
+      if (job.running && job.currentDayKey != 0)
         Text(
-          '正在处理 ${dayKeyToChinese(p.currentDayKey)}',
+          '正在处理 ${dayKeyToChinese(job.currentDayKey)}',
           style: theme.textTheme.bodySmall,
         ),
+      if (job.finished && job.total > 0 && job.failed == 0)
+        Text(
+          '全部生成完成 ✓',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: ShiguangColors.leafDark,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
     ];
-    for (final dayKey in _failed) {
+    for (final dayKey in job.failedDays) {
       out.addAll([
         const SizedBox(height: 6),
         Row(
@@ -280,9 +263,8 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
                 ),
               ),
             TextButton(
-              onPressed: _retrying.contains(dayKey)
-                  ? null
-                  : () => _retryDay(dayKey),
+              onPressed:
+                  _retrying.contains(dayKey) ? null : () => _retryDay(dayKey),
               child: Text(_retrying.contains(dayKey) ? '重试中…' : '重试'),
             ),
           ],

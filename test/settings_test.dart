@@ -16,7 +16,9 @@ import 'package:shiguang_handbook/core/models/models.dart';
 import 'package:shiguang_handbook/core/storage/photo_index_store.dart';
 import 'package:shiguang_handbook/features/settings/settings_page.dart';
 
-/// 只实现批量流的假仓库：阶段 2 前让批量区也能被真实点击验证。
+/// 假仓库：单日 generate 立即返回罐头总结（批量服务现在按天驱动，
+/// 假实现让「点击 → 队列消费 → 进度 3/3」走真实链路）；
+/// generateMonth 保留给仍引用流接口的场景。
 class _FakeSummaryRepository implements SummaryRepository {
   @override
   Future<AiSummary?> cached(int dayKey) async => null;
@@ -27,7 +29,17 @@ class _FakeSummaryRepository implements SummaryRepository {
     bool force = false,
     void Function(int current, int total)? onImageProgress,
   }) async {
-    throw const AiException('假实现：单日生成不参与本测试');
+    return AiSummary(
+      dayKey: record.dayKey,
+      title: '假标题',
+      narrative: '假总结内容，用于验证批量进度链路。',
+      tags: const ['测试'],
+      mood: '晴',
+      highlights: const [],
+      model: 'fake-model',
+      photoSig: computePhotoSig(record.photos),
+      createdAtMs: DateTime.now().millisecondsSinceEpoch,
+    );
   }
 
   @override
@@ -69,11 +81,27 @@ void main() {
   Future<InMemoryPhotoIndexStore> seedStore() async {
     final store = InMemoryPhotoIndexStore();
     await store.init();
-    await store.addSource(PhotoSource(
+    final sourceId = await store.addSource(PhotoSource(
       type: SourceType.folder,
       path: r'D:\Photos\旅行',
       lastScanMs: DateTime(2026, 9, 1, 10, 30).millisecondsSinceEpoch,
     ));
+    // 种「当前月」1-3 号共 3 天照片（无总结）：
+    // 批量服务按「有照片且缺总结」建队，这 3 天就是进度 3/3 的真实来源。
+    final now = DateTime.now();
+    await store.upsertPhotos([
+      for (var d = 1; d <= 3; d++)
+        Photo(
+          path: 'D:\\Photos\\旅行\\$d.jpg',
+          fileSize: 1024,
+          mtimeMs: DateTime(now.year, now.month, d, 12)
+              .millisecondsSinceEpoch,
+          takenAtMs: DateTime(now.year, now.month, d, 12)
+              .millisecondsSinceEpoch,
+          dayKey: dayKeyOf(DateTime(now.year, now.month, d)),
+          sourceId: sourceId,
+        ),
+    ]);
     return store;
   }
 
@@ -148,7 +176,8 @@ void main() {
     await tester.tap(find.text('生成本月全部总结'));
     await settle(tester, frames: 20);
 
-    // 假流最后一帧是 finished(3/3)，进度文案应停在终态
+    // 队列来自「当前月 1-3 号」3 个有照片无总结的天，假仓库逐天秒回，
+    // 进度文案应停在真实终态 3/3（走的是全局批量服务的按天引擎）
     expect(find.text('进度 3/3'), findsOneWidget);
   });
 }

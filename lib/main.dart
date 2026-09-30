@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app/app_style.dart';
 import 'app/app_theme.dart';
+import 'app/batch_service.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
 import 'core/ai/summary_repository.dart';
@@ -63,8 +64,37 @@ class ShiguangApp extends StatelessWidget {
           ],
           routes: AppRoutes.routes,
           initialRoute: AppRoutes.home,
+          // 每次启动检查落盘的批量残队：上次没跑完的「补全缺失总结」
+          // 在这里自动续跑（用户要求：退出软件后从头到尾仍要补完）。
+          builder: (context, child) => _BatchAutoResume(child: child),
         );
       },
     );
   }
+}
+
+/// 启动即检查批量任务残队（无残队时是零开销 no-op）。
+/// 挂在 MaterialApp.builder 下：位于 Navigator 之上、根 ProviderScope 之内。
+class _BatchAutoResume extends ConsumerStatefulWidget {
+  const _BatchAutoResume({this.child});
+
+  final Widget? child;
+
+  @override
+  ConsumerState<_BatchAutoResume> createState() => _BatchAutoResumeState();
+}
+
+class _BatchAutoResumeState extends ConsumerState<_BatchAutoResume> {
+  @override
+  void initState() {
+    super.initState();
+    // 等首帧后再恢复：让 store/绑定先就绪，也避免启动动画期间抢网络
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(batchServiceProvider.notifier).resumeIfPending();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child ?? const SizedBox.shrink();
 }
