@@ -301,11 +301,20 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
         );
 
       case DayNodeStatus.pastEmpty:
-        return _circle(
-          r: r,
-          fill: CandyColors.creamFill,
-          borderWidth: 3.5,
-          child: _number(r),
+        // 「无照片记录」专属形态（用户要求有别于有图日）：
+        // 整体缩到 0.86 再压到 60% 不透明度——地图上一眼能数出
+        // 哪些天有记录、哪些天空着，比只换描边颜色醒目得多。
+        return Transform.scale(
+          scale: 0.86,
+          child: Opacity(
+            opacity: 0.6,
+            child: _circle(
+              r: r,
+              fill: CandyColors.creamFill,
+              borderWidth: 3,
+              child: _number(r),
+            ),
+          ),
         );
 
       case DayNodeStatus.today:

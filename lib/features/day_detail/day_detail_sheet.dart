@@ -20,6 +20,7 @@ import '../../core/storage/photo_index_store.dart';
 import '../../core/thumbnails/thumb_image.dart';
 import '../../widgets/hand_card.dart';
 import '../settings/settings_page.dart';
+import 'photo_viewer.dart';
 
 /// 展开某一天详情的底部面板（由 day_detail_launcher 嵌进 DraggableScrollableSheet）。
 class DayDetailSheet extends ConsumerStatefulWidget {
@@ -511,7 +512,7 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
   }
 
   /// 照片网格：GridView.builder 走 builder 惰性取子项，256 档缩略图由
-  /// ThumbImage 自己排队生成，不阻塞面板打开。
+  /// ThumbImage 自己排队生成，不阻塞面板打开；点任意图进全屏查看器。
   Widget _photoGrid(DayRecord record) {
     return GridView.builder(
       shrinkWrap: true,
@@ -523,12 +524,20 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
         mainAxisSpacing: 8,
       ),
       itemCount: record.photos.length,
-      itemBuilder: (context, index) => ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: ThumbImage(
-          sourcePath: record.photos[index].path,
-          size: 256,
-          placeholderColor: ShiguangColors.paperDeep,
+      itemBuilder: (context, index) => Semantics(
+        button: true,
+        label: '放大查看第 ${index + 1} 张照片',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => showPhotoViewer(context, record.photos[index].path),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: ThumbImage(
+              sourcePath: record.photos[index].path,
+              size: 256,
+              placeholderColor: ShiguangColors.paperDeep,
+            ),
+          ),
         ),
       ),
     );

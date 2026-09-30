@@ -136,6 +136,14 @@ class _MapHomeState extends ConsumerState<_MapHome> {
     final year = monthKey ~/ 100;
     final month = monthKey % 100;
     final pageIndex = clampMonthIndex(monthToIndex(year, month));
+    // 本月「有照片的天数」：头部副行展示（用户要求月份上显示记录情况）
+    final photoDays = ref
+            .watch(monthDayIndexProvider(monthKey))
+            .value
+            ?.values
+            .where((m) => m.photoCount > 0)
+            .length ??
+        0;
 
     return Scaffold(
       // 天空要从状态栏一路铺到底，背景与工具栏都留空给 SkyBackground。
@@ -173,6 +181,8 @@ class _MapHomeState extends ConsumerState<_MapHome> {
                   _MonthHeader(
                     year: year,
                     month: month,
+                    photoDays: photoDays,
+                    style: style,
                     canPrev: pageIndex > 0,
                     canNext: pageIndex < kMapMonthCount - 1,
                     onPrev: () => _goTo(pageIndex - 1),
@@ -216,6 +226,13 @@ class _MapHomeState extends ConsumerState<_MapHome> {
 class _MonthHeader extends StatelessWidget {
   final int year;
   final int month;
+
+  /// 本月有照片记录的天数（副行文案用）。
+  final int photoDays;
+
+  /// 当前皮肤（副行文字/光晕色随皮肤走，保证任何天空下可读）。
+  final AppStyle style;
+
   final bool canPrev;
   final bool canNext;
   final VoidCallback onPrev;
@@ -227,6 +244,8 @@ class _MonthHeader extends StatelessWidget {
   const _MonthHeader({
     required this.year,
     required this.month,
+    required this.photoDays,
+    required this.style,
     required this.canPrev,
     required this.canNext,
     required this.onPrev,
@@ -236,11 +255,21 @@ class _MonthHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 副行配色随皮肤：日间/黄昏用墨棕压白光晕，星夜用纸白压暗光晕——
+    // 副行浮在天空上（不在奶油胶囊里），两套反差都要保证可读。
+    final lightSkin = style != AppStyle.night;
+    final statColor =
+        lightSkin ? CandyColors.outline : CandyColors.glossWhite;
+    final statShadow =
+        lightSkin ? Colors.white.withValues(alpha: 0.85) : Colors.black.withValues(alpha: 0.5);
     return Padding(
       // 上边距保持 6：测试断言 chevron 顶边必须贴在 AppBar 下沿
       // （≥ appbarBottom - 1 且 ≤ +40），加厚胶囊后仍留有余量。
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-      child: Container(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
           // 木牌胶囊：奶油底 + 3.5px 深棕厚描边 + 底部实心厚阴影（blur 0），
@@ -303,7 +332,23 @@ class _MonthHeader extends StatelessWidget {
               onPressed: onNext,
             ),
           ],
-        ),
+          ),
+          ),
+          const SizedBox(height: 3),
+          // 副行：本月记录情况（用户要求「月份上面显示有照片记录」）
+          Text(
+            photoDays > 0 ? '有照片记录 $photoDays 天' : '这个月还没有照片记录',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              color: statColor,
+              shadows: [
+                Shadow(color: statShadow, offset: const Offset(0, 1), blurRadius: 0),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

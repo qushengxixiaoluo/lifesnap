@@ -9,7 +9,6 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../../app/app_style.dart';
 import 'map_providers.dart';
 
 class MonthJumpDialog extends StatefulWidget {
@@ -66,7 +65,9 @@ class _MonthJumpDialogState extends State<MonthJumpDialog> {
                     textAlign: TextAlign.center,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w800,
-                      color: ShiguangColors.inkBrown,
+                      // 必须用 onSurface 随主题走：写死 inkBrown（深棕）在
+                      // 星夜的近黑对话框底上几乎不可见（用户反馈「黄色太浅」）
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                 ),

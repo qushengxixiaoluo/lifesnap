@@ -18,13 +18,16 @@ import 'package:shiguang_handbook/core/thumbnails/thumb_generator.dart';
 import 'package:shiguang_handbook/core/thumbnails/thumb_paths.dart';
 
 void main() {
-  test('size 映射到 256/512 两档，中界 384', () {
+  test('size 映射到 256/512/1280 三档，中界 384/768', () {
     expect(normalizeThumbSize(200), 256);
     expect(normalizeThumbSize(256), 256);
     expect(normalizeThumbSize(383), 256);
     expect(normalizeThumbSize(384), 512);
-    expect(normalizeThumbSize(512), 512);
-    expect(normalizeThumbSize(1024), 512);
+    expect(normalizeThumbSize(767), 512);
+    // 1280 档：详情点开大图的全屏查看器专用
+    expect(normalizeThumbSize(768), 1280);
+    expect(normalizeThumbSize(1024), 1280);
+    expect(normalizeThumbSize(1280), 1280);
   });
 
   test('缓存相对路径：{档位}/{sha1前2位}/{sha1}.jpg', () {
