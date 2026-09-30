@@ -6,7 +6,7 @@
 /// 同时切线连续，视觉上像一条手绘的探险路线。
 ///
 /// 糖果公路画法（风格圣经第 5 条）：三层叠加——
-/// 1. 底层：深巧克力棕粗描边（路基，圆头线帽）；
+/// 1. 底层：画风描边色粗线（糖果=深巧克力棕、LowPoly=近黑，圆头线帽）；
 /// 2. 上层：奶油色路面（行车道）；
 /// 3. 路中央：糖果橙圆点分道线（短虚线 + 圆头帽，像糖豆撒在路上）。
 ///
@@ -45,8 +45,9 @@ class MapPathPainter extends CustomPainter {
   /// 换肤后 shouldRepaint 靠它感知（见 [shouldRepaint]）。
   final AppStyle style;
 
-  /// 当前画风：雾罩色温同样跟「天色 × 画风」的光晕走——
-  /// 只带 style 不带 art 的话，旧纸↔糖果切换时光晕变了却判「不用重绘」。
+  /// 当前画风：雾罩色温同样跟「天色 × 画风」的光晕走，描边也从它取
+  /// （outlineFor：糖果棕 ↔ 近黑）——只带 style 不带 art 的话，
+  /// LowPoly↔糖果切换时光晕与描边都变了却判「不用重绘」。
   final ArtStyle art;
 
   MapPathPainter({
@@ -138,12 +139,12 @@ class MapPathPainter extends CustomPainter {
   /// 标准糖果公路：深棕路基 → 奶油路面 → 橙色糖豆分道线。
   /// 三层都用圆头线帽，拐弯处才是圆润的「软管」而不是断头折线。
   void _paintRoad(Canvas canvas, Path path) {
-    // ① 路基：深巧克力棕粗描边，比路面宽出一圈 = 公路的「护边」。
+    // ① 路基：画风描边色粗线（outlineFor(art)），比路面宽出一圈 = 公路的「护边」。
     final base = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 13
       ..strokeCap = StrokeCap.round
-      ..color = CandyColors.outline;
+      ..color = outlineFor(art);
     canvas.drawPath(path, base);
 
     // ② 路面：奶油色，压在路基上形成「铺装路面」。
@@ -170,7 +171,7 @@ class MapPathPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 8
       ..strokeCap = StrokeCap.round
-      ..color = CandyColors.outline.withValues(alpha: 0.75);
+      ..color = outlineFor(art).withValues(alpha: 0.75);
     canvas.drawPath(path, base);
 
     final road = Paint()
@@ -184,7 +185,7 @@ class MapPathPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2
       ..strokeCap = StrokeCap.round
-      ..color = CandyColors.outline.withValues(alpha: 0.4);
+      ..color = outlineFor(art).withValues(alpha: 0.4);
     _drawDashed(canvas, path, dots, 2, 10);
   }
 
@@ -204,7 +205,7 @@ class MapPathPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 13
       ..strokeCap = StrokeCap.round
-      ..color = CandyColors.outline.withValues(alpha: 0.85);
+      ..color = outlineFor(art).withValues(alpha: 0.85);
     _drawDashed(canvas, path, base, 14, 10);
 
     // 路面虚线（奶油短节，与路基同节奏但窄一圈）。

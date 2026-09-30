@@ -1,7 +1,7 @@
 /// 设置页 · 外观与关于分区（E 轨）。
 ///
 /// 两行选择器（画风是独立于天色的第二根轴，不是第四个天色值）：
-/// - 「画风」行：糖果手绘 / 油墨旧纸 两张卡（存 ArtStyleNotifier，键 artMode）；
+/// - 「画风」行：糖果手绘 / LowPoly 描边 两张卡（存 ArtStyleNotifier，键 artMode）；
 /// - 「天色」行：日光 / 黄昏 / 星夜 三张卡（存 AppStyleNotifier，键 skinMode，逻辑不动）。
 /// 两行都双监听（ValueListenable + Listenable）即时预览——预览渐变一律走
 /// art 感知的 tokensFor，所以任何一张卡画的都是「该组合真实会长成的样子」。
@@ -31,7 +31,7 @@ class _AppearanceSectionState extends State<AppearanceSection> {
 
   static const _artNames = <ArtStyle, String>{
     ArtStyle.candy: '糖果手绘',
-    ArtStyle.agedInk: '油墨旧纸',
+    ArtStyle.lowPoly: 'LowPoly 描边',
   };
 
   int? _cacheBytes; // null = 还在读
@@ -157,7 +157,7 @@ class _AppearanceSectionState extends State<AppearanceSection> {
     );
   }
 
-  /// 画风卡：预览画的是「当前天色 × 本卡画风」的真实渐变——
+  /// 画风卡：预览画的是「当前天色 × 本卡画风」的真实画面——
   /// 两张卡并排就是同一天色下两种画风的直接对照。
   Widget _artCard(ArtStyle art, ArtStyle current, AppStyle time) {
     final selected = current == art;
@@ -165,6 +165,7 @@ class _AppearanceSectionState extends State<AppearanceSection> {
     return _skinCard(
       selected: selected,
       sky: sky,
+      poly: art == ArtStyle.lowPoly,
       label: _artNames[art] ?? art.name,
       labelColor: _labelColor(time, art),
       labelShadow: _labelShadow(time, art),
@@ -176,14 +177,15 @@ class _AppearanceSectionState extends State<AppearanceSection> {
     );
   }
 
-  /// 天色卡：预览画的是「本卡天色 × 当前画风」的真实渐变
-  /// （tokensFor 显式传画风，切到旧纸后三张卡自动变成三张旧纸）。
+  /// 天色卡：预览画的是「本卡天色 × 当前画风」的真实画面
+  /// （tokensFor 显式传画风，切到 LowPoly 后三张卡自动变成三张低多边形天）。
   Widget _styleCard(AppStyle style, AppStyle current, ArtStyle art) {
     final selected = current == style;
     final sky = tokensFor(style, art);
     return _skinCard(
       selected: selected,
       sky: sky,
+      poly: art == ArtStyle.lowPoly,
       label: _styleNames[style] ?? style.name,
       labelColor: _labelColor(style, art),
       labelShadow: _labelShadow(style, art),
@@ -196,23 +198,27 @@ class _AppearanceSectionState extends State<AppearanceSection> {
   }
 
   /// 卡片文字色：糖果沿用「白字 + 墨影」的既有观感；
-  /// 旧纸卡按画风取墨字/淡纸字，压在自己的渐变上更像印在纸上。
-  Color _labelColor(AppStyle time, ArtStyle art) => art == ArtStyle.agedInk
+  /// LowPoly 卡按画风矩阵取近黑字/冷白字，压在自己的平涂色带上才读得清。
+  Color _labelColor(AppStyle time, ArtStyle art) => art == ArtStyle.lowPoly
       ? textColorFor(time, art)
       : ShiguangColors.starWhite;
 
-  /// 卡片文字影：与文字色反相——浅纸上压白影、暗纸上压墨影，任何渐变都读得清。
+  /// 卡片文字影：与文字色反相——亮底压白影、夜底压墨影，任何色带都读得清。
   Color _labelShadow(AppStyle time, ArtStyle art) {
-    if (art != ArtStyle.agedInk) return ShiguangColors.inkBrown;
+    if (art != ArtStyle.lowPoly) return ShiguangColors.inkBrown;
     return time == AppStyle.night
         ? Colors.black.withValues(alpha: 0.6)
         : Colors.white.withValues(alpha: 0.9);
   }
 
-  /// 皮肤卡本体（画风/天色两行共用）：渐变预览 + 选中金框 + 金勾。
+  /// 皮肤卡本体（画风/天色两行共用）：预览 + 选中金框 + 金勾。
+  ///
+  /// [poly] = 这张卡画的是 LowPoly：预览改用**硬边色带**（与真实天空同画法，
+  /// 不做羽化渐变），未选中边框也换成近黑——卡上画的就是点下去的样子。
   Widget _skinCard({
     required bool selected,
     required SkyTokens sky,
+    required bool poly,
     required String label,
     required Color labelColor,
     required Color labelShadow,
@@ -231,14 +237,31 @@ class _AppearanceSectionState extends State<AppearanceSection> {
             border: Border.all(
               color: selected
                   ? ShiguangColors.completedGold
-                  : ShiguangColors.wood.withValues(alpha: 0.5),
+                  : (poly
+                      ? ShiguangColors.polyOutline.withValues(alpha: 0.55)
+                      : ShiguangColors.wood.withValues(alpha: 0.5)),
               width: selected ? 2.5 : 1,
             ),
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [sky.top, sky.mid, sky.horizon],
-            ),
+            gradient: poly
+                // 硬边三段带：stop 成对出现 = 无羽化，和天空层同一条分界
+                ? LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      sky.top,
+                      sky.top,
+                      sky.mid,
+                      sky.mid,
+                      sky.horizon,
+                      sky.horizon,
+                    ],
+                    stops: const [0.0, 0.44, 0.44, 0.74, 0.74, 1.0],
+                  )
+                : LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [sky.top, sky.mid, sky.horizon],
+                  ),
             boxShadow: selected
                 ? [
                     BoxShadow(

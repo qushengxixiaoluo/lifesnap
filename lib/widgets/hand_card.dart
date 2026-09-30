@@ -1,15 +1,18 @@
 /// 手绘风卡片组件（A 轨交付版）。
 ///
-/// 【钉死的签名】E 轨详情/设置面板盲写对接：水彩纸底 + 手绘描边 + 可选点击。
+/// 【钉死的签名】E 轨详情/设置面板盲写对接：纸底 + 描边 + 可选点击。
 ///
 /// 设计取舍：
 /// 1) 颜色走 Theme（colorScheme.surface / outline）而不是写死纸色——
 ///    星夜皮肤下 surface 自动转深墨蓝，卡片不会在深夜顶着一块白纸刺眼；
 ///    日间/黄昏则回到水彩纸本色。单一颜色来源在 app_theme.dart；
-/// 2) 层次全靠「手绘投影 + 二次描边」自己画：投影是偏移 3.5/4.5px 的
-///    极淡墨棕一笔，不是 Material elevation 阴影（全仓禁止用默认阴影造层次）；
-/// 3) 描边是抖动边：沿圆角矩形轮廓按弧长采样，逐点向法线方向按固定种子
-///    偏移 ±1.4px——每次重建抖动一致，不闪；再压一条错位的铅笔复线。
+/// 2) 层次全靠「投影 + 描边」自己画：投影是偏移 3.5/4.5px 的一笔，
+///    不是 Material elevation 阴影（全仓禁止用默认阴影造层次）；
+/// 3) candy：描边是抖动边（沿轮廓按弧长采样、法线方向固定种子偏移 ±1.4px，
+///    每次重建抖动一致）+ 错位铅笔复线——草稿感；
+/// 4) lowPoly：换成**贴纸卡**——直边圆角矩形 + 1.8px 近黑描边（读主题
+///    colorScheme.outline，画风感知）+ 硬影（blur 0 效果：位移实心、不羽化），
+///    没有抖动、没有复线——低多边形的面要干净。
 library;
 
 import 'dart:math' as math;
@@ -34,11 +37,14 @@ class HandCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 画风感知：投影色与「要不要抖动」跟着当前画风走（低多边形 = 贴纸卡）
+    final isLow = ArtStyleNotifier.current.value == ArtStyle.lowPoly;
     final card = CustomPaint(
       painter: _HandCardPainter(
         fill: scheme.surface,
         line: scheme.outline,
-        shadow: ShiguangColors.inkBrown,
+        shadow: isLow ? ShiguangColors.polyOutline : ShiguangColors.inkBrown,
+        sticker: isLow,
       ),
       child: Padding(
         padding: padding ?? const EdgeInsets.all(16),
@@ -55,29 +61,55 @@ class HandCard extends StatelessWidget {
   }
 }
 
-/// 卡片绘制：手绘投影 → 水彩纸底 → 抖动描边 + 铅笔复线。
+/// 卡片绘制：投影 → 平涂底 → 描边（candy 抖动双线 / lowPoly 直边单线）。
 class _HandCardPainter extends CustomPainter {
   _HandCardPainter({
     required this.fill,
     required this.line,
     required this.shadow,
+    required this.sticker,
   });
 
   /// 纸底色（来自主题，随皮肤深浅）。
   final Color fill;
 
-  /// 描边色。
+  /// 描边色（来自主题 outline：candy 棕细边 / lowPoly 近黑）。
   final Color line;
 
-  /// 手绘投影色（墨棕）。
+  /// 投影色（candy 墨棕 / lowPoly 近黑）。
   final Color shadow;
+
+  /// true = 贴纸卡（LowPoly）：直边 + 粗黑边 + 实心硬影，无抖动无复线。
+  final bool sticker;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     // 四边各留 6px：给偏移投影和描边笔宽留出墨量，不被画布边缘裁掉
     final rect = (Offset.zero & size).deflate(6);
-    final path = _jitteredRRect(rect, 16, 1.4, 9527);
+    final base = Path()
+      ..addRRect(RRect.fromRectAndRadius(rect, const Radius.circular(16)));
+    final path = sticker ? base : _jitteredRRect(rect, 16, 1.4, 9527);
+
+    if (sticker) {
+      // 1) 贴纸硬影：位移实心块（blur 0 的等效画法——画的就是那一块，不羽化）
+      canvas.drawPath(
+        path.shift(const Offset(4, 5)),
+        Paint()..color = shadow.withValues(alpha: 0.28),
+      );
+      // 2) 平涂底
+      canvas.drawPath(path, Paint()..color = fill);
+      // 3) 单圈近黑描边（不抖、不复线）
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.8
+          ..strokeJoin = StrokeJoin.round
+          ..color = line,
+      );
+      return;
+    }
 
     // 1) 手绘投影：向右下错一笔极淡的墨——纸片「浮」起来（非 Material 阴影）
     canvas.drawPath(
@@ -149,7 +181,8 @@ class _HandCardPainter extends CustomPainter {
   bool shouldRepaint(_HandCardPainter oldDelegate) =>
       oldDelegate.fill != fill ||
       oldDelegate.line != line ||
-      oldDelegate.shadow != shadow;
+      oldDelegate.shadow != shadow ||
+      oldDelegate.sticker != sticker;
 
   @override
   // 纯装饰没有语义，恒 false

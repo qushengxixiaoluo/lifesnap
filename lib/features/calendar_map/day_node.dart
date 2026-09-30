@@ -1,8 +1,12 @@
 /// 闯关地图 · 单个日节点（糖果风五状态视觉实现）
 ///
 /// 风格圣经：保卫萝卜 / 燃烧的蔬菜 Q版糖果塔防——节点是「按下去会弹的
-/// 软糖圆扣」：上亮下暗果冻渐变 + 4px 深巧克力厚描边 + 顶部高光弧 +
+/// 软糖圆扣」：上亮下暗果冻渐变 + 4px 厚描边 + 顶部高光弧 +
 /// 底部实心厚阴影（不是 Material elevation）。
+///
+/// 描边色走画风感知的 [outlineNow]（不是写死的 outlineNow()）：
+/// 糖果 = 深巧克力棕、LowPoly = #141414 近黑——画风一换，整组扣的轮廓
+/// 跟着换；页面外层已监听 ArtStyleNotifier，重建即取到新描边。
 ///
 /// 五种状态与视觉语义：
 /// | 状态 | 视觉 | 为什么这样画 |
@@ -25,6 +29,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../app/app_style.dart';
 import '../../core/models/models.dart';
 import '../../core/thumbnails/thumb_image.dart';
 import 'candy_colors.dart';
@@ -249,13 +254,13 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
           gradient: CandyColors.pinkFill,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: CandyColors.outline,
+            color: outlineNow(),
             width: 2.4,
           ),
           boxShadow: [
             // 实心厚阴影（blur 0）＝玩具贴纸感，不是 Material elevation。
             BoxShadow(
-              color: CandyColors.outline.withValues(alpha: 0.9),
+              color: outlineNow().withValues(alpha: 0.9),
               blurRadius: 0,
               offset: const Offset(0, 2.5),
             ),
@@ -267,7 +272,7 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
             fontSize: 10,
             height: 1.2,
             fontWeight: FontWeight.w800,
-            // 粉底白字（风格圣经第 8 条）：深棕描边已把字框住，白字最醒目。
+            // 粉底白字（风格圣经第 8 条）：厚描边已把字框住，白字最醒目。
             color: CandyColors.glossWhite,
           ),
         ),
@@ -346,31 +351,35 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
   }
 
   /// 统一的果冻圆形容器：
-  /// 果冻渐变填充 + 厚棕描边（有图态换白描边）+ 底部实心厚阴影。
+  /// 果冻渐变填充 + 厚描边（有图态换白描边）+ 底部实心厚阴影。
   ///
   /// Container 在有 border 时会把 border 尺寸自动转成 child 的内边距，
   /// 所以 child（缩略图 / 数字）正好落在内圆里，不必手动算 inset；
   /// [overlay] 用 Positioned.fill 铺满**内圆**，其内部再自行定位角标。
+  ///
+  /// [borderColor] 为 null 时取当前画风描边（outlineNow）。不能写成默认值：
+  /// Dart 的可选参数默认值必须是 const，而描边色是运行时读全局画风得来的。
   Widget _circle({
     required double r,
     required Gradient fill,
     required double borderWidth,
     required Widget child,
-    Color borderColor = CandyColors.outline,
+    Color? borderColor,
     Widget? overlay,
   }) {
+    final line = borderColor ?? outlineNow();
     return Container(
       width: r * 2,
       height: r * 2,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: fill, // 上亮下暗 = 软糖的受光面
-        border: Border.all(color: borderColor, width: borderWidth),
+        border: Border.all(color: line, width: borderWidth),
         boxShadow: [
-          // 底部实心厚阴影：blur 0 + 纯深棕，糖果塔防的「玩具投影」；
+          // 底部实心厚阴影：blur 0 + 当前画风描边色，糖果塔防的「玩具投影」；
           // 禁止 Material elevation（全仓铁律，靠描边+投影自己画层次）。
           BoxShadow(
-            color: CandyColors.outline.withValues(alpha: 0.92),
+            color: outlineNow().withValues(alpha: 0.92),
             blurRadius: 0,
             offset: const Offset(0, 4),
           ),
@@ -401,11 +410,11 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
         placeholderColor: CandyColors.creamDark,
       );
 
-  /// 日号数字：粗体圆润（w800）+ 一圈深棕描边感阴影（模拟细描边字）。
-  /// 果冻底上用白字，奶油素扣上用深棕字（对比度 ≥ 4.5 的方向）。
+  /// 日号数字：粗体圆润（w800）+ 一圈描边感阴影（模拟细描边字）。
+  /// 果冻底上用白字，奶油素扣上用画风描边色字（对比度 ≥ 4.5 的方向）。
   Widget _number(double r, {double alpha = 1, bool onColor = false}) {
     final day = widget.dayKey % 100;
-    final base = onColor ? CandyColors.glossWhite : CandyColors.outline;
+    final base = onColor ? CandyColors.glossWhite : outlineNow();
     // 必须包 Center：裸 Text 放进 SizedBox.expand 会被压成
     // 「宽度顶满 + 高度顶满」，文字按 start 对齐画在左上角（数字错位的根因）。
     return Center(
@@ -418,8 +427,8 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
         color: base.withValues(alpha: alpha),
         shadows: [
           Shadow(
-            // 白字压深棕影、棕字压淡棕影：都补一圈「描边」，字不糊在底色上。
-            color: CandyColors.outline.withValues(
+            // 白字压深影、深字压淡影：都补一圈「描边」，字不糊在底色上。
+            color: outlineNow().withValues(
               alpha: onColor ? 0.45 : 0.25,
             ),
             offset: const Offset(0, 1.2),
@@ -440,10 +449,10 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: CandyColors.glossWhite,
-        border: Border.all(color: CandyColors.outline, width: 2.2),
+        border: Border.all(color: outlineNow(), width: 2.2),
         boxShadow: [
           BoxShadow(
-            color: CandyColors.outline.withValues(alpha: 0.9),
+            color: outlineNow().withValues(alpha: 0.9),
             blurRadius: 0,
             offset: const Offset(0, 2),
           ),
@@ -466,10 +475,10 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: CandyColors.glossWhite,
-        border: Border.all(color: CandyColors.outline, width: 2.2),
+        border: Border.all(color: outlineNow(), width: 2.2),
         boxShadow: [
           BoxShadow(
-            color: CandyColors.outline.withValues(alpha: 0.9),
+            color: outlineNow().withValues(alpha: 0.9),
             blurRadius: 0,
             offset: const Offset(0, 2),
           ),
@@ -478,7 +487,7 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
       child: Icon(
         Icons.lock_rounded,
         size: size * 0.64,
-        color: CandyColors.outline,
+        color: outlineNow(),
       ),
     );
   }

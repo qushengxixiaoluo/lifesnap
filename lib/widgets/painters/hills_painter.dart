@@ -1,13 +1,18 @@
 /// 底部双层草坡 painter（换肤变色、不参与循环动画）。
 ///
-/// 画法思路：
+/// candy 画法思路：
 /// 1) 每层坡 = 两个不同频率正弦叠加的剖面线，按 6px 步长采样成折线，
 ///    顶点带固定种子抖动（横向 ±1.6px、纵向 ±2.4px）——视觉上是
 ///    「手抖画出来的一笔」而不是数学上完美的曲线；
 /// 2) 远坡混入地平线光（更亮更灰）制造空气透视，近坡用纯草色压住画面底部；
 /// 3) 近坡顶缘画草叶小簇：三根一撮的二次贝塞尔甩笔，让坡线不呆板；
-/// 4) 该层没有 progress 参数：循环 tick 时指纹不变，shouldRepaint 恒 false，
-///    云动/星闪都不会惊动它，只有换肤的 600ms crossfade 才逐帧重绘。
+/// 4) 该层没有 progress 参数：循环 tick 时指纹不变，shouldRepaint 只在
+///    换肤/换画风（颜色或 poly 变）时为 true，云动/星闪都不会惊动它。
+///
+/// lowPoly 画法（poly ≥ 0.5 时切换）：三角面片山峦——2 层折线切出的
+/// 多边形块面，每层平涂并按组切成 2~4 个明暗面，块面之间与轮廓一律
+/// #141414 2.5~3px 黑描边（低多边形的「面 + 黑线」语言）；
+/// candy 分支维持原有圆润草坡，一分不动。
 library;
 
 import 'dart:math' as math;
@@ -22,6 +27,7 @@ class HillsPainter extends CustomPainter {
     required this.back,
     required this.front,
     this.seed = 7001,
+    this.poly = 0,
   });
 
   /// 远坡色（草色混地平线光）。
@@ -33,9 +39,17 @@ class HillsPainter extends CustomPainter {
   /// 顶点抖动种子。
   final int seed;
 
+  /// LowPoly 度 0~1：过 0.5 换成多边形山峦（形状不插值，颜色照常 lerp）。
+  final double poly;
+
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
+
+    if (poly >= 0.5) {
+      _drawPolyHills(canvas, size);
+      return;
+    }
 
     // 先远后近：远坡先画，被近坡自然遮挡出层次（无 Material 阴影）
     _drawHill(
@@ -59,6 +73,110 @@ class HillsPainter extends CustomPainter {
       strokeAlpha: 0.34,
       seed: seed + 1,
       tufts: true,
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // LowPoly：三角面片山峦
+  // ---------------------------------------------------------------------
+
+  /// 画两层多边形山：远层先画、近层压上，层序与糖果画法一致。
+  void _drawPolyHills(Canvas canvas, Size size) {
+    // 远层细一点、近层粗一点 = 山的远近（描边粗细本身就是纵深线索）
+    _drawPolyLayer(
+      canvas,
+      size,
+      baseFrac: 0.72,
+      ampFrac: 0.11,
+      seed: seed,
+      fill: back,
+      stroke: 2.6,
+    );
+    _drawPolyLayer(
+      canvas,
+      size,
+      baseFrac: 0.87,
+      ampFrac: 0.13,
+      seed: seed + 1,
+      fill: front,
+      stroke: 3.0,
+    );
+  }
+
+  /// 画一层多边形山：折线山脊 → 按段切明暗面 → 黑线勾轮廓与切面缝。
+  ///
+  /// 明暗面按「相邻 2 段一组」分 3 组（亮 / 原色 / 暗各约 ±10% 明度），
+  /// 于是 6 段折线得到 3 个块面——低多边形的体积感全靠这层明暗差。
+  void _drawPolyLayer(
+    Canvas canvas,
+    Size size, {
+    required double baseFrac,
+    required double ampFrac,
+    required int seed,
+    required Color fill,
+    required double stroke,
+  }) {
+    final rng = math.Random(seed);
+    final w = size.width;
+    const n = 6; // 6 段折线 → 3 组明暗面（每组 2 段）
+    const overshoot = 24.0; // 左右各多画一点，坡到屏幕外不露缝
+
+    // 山脊折线：等距采样 + 固定种子随机高度（确定性：同一尺寸每次同形）
+    final ridge = <Offset>[];
+    for (var i = 0; i <= n; i++) {
+      final x = -overshoot + (w + overshoot * 2) * i / n;
+      final y = (baseFrac - ampFrac * rng.nextDouble()) * size.height;
+      ridge.add(Offset(x, y));
+    }
+
+    final shades = [
+      Color.lerp(fill, const Color(0xFFFFFFFF), 0.10)!, // 亮面
+      fill, // 原色面
+      Color.lerp(fill, const Color(0xFF000000), 0.14)!, // 暗面
+    ];
+    final ink = ShiguangColors.polyOutline;
+    final bottom = size.height + overshoot;
+
+    // ① 明暗面：每段一个四边形（山脊段 → 画布底），按组取明暗
+    for (var i = 0; i < n; i++) {
+      final facet = Path()
+        ..moveTo(ridge[i].dx, ridge[i].dy)
+        ..lineTo(ridge[i + 1].dx, ridge[i + 1].dy)
+        ..lineTo(ridge[i + 1].dx, bottom)
+        ..lineTo(ridge[i].dx, bottom)
+        ..close();
+      canvas.drawPath(facet, Paint()..color = shades[(i ~/ 2) % shades.length]);
+    }
+
+    // ② 轮廓：山脊折线（与天空的分界）
+    final outlinePath = Path()..moveTo(ridge.first.dx, ridge.first.dy);
+    for (final p in ridge.skip(1)) {
+      outlinePath.lineTo(p.dx, p.dy);
+    }
+    canvas.drawPath(
+      outlinePath,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..color = ink,
+    );
+
+    // ③ 切面缝：每个内部顶点向下的直棱（面与面之间的黑线）
+    final seams = Path();
+    for (var i = 1; i < n; i++) {
+      seams
+        ..moveTo(ridge[i].dx, ridge[i].dy)
+        ..lineTo(ridge[i].dx, bottom);
+    }
+    canvas.drawPath(
+      seams,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke - 0.4
+        ..strokeCap = StrokeCap.round
+        ..color = ink,
     );
   }
 
@@ -160,7 +278,8 @@ class HillsPainter extends CustomPainter {
   bool shouldRepaint(HillsPainter oldDelegate) =>
       oldDelegate.back != back ||
       oldDelegate.front != front ||
-      oldDelegate.seed != seed;
+      oldDelegate.seed != seed ||
+      oldDelegate.poly != poly;
 
   @override
   // 纯装饰层没有语义，恒 false 避免换肤过渡期无谓的语义树更新

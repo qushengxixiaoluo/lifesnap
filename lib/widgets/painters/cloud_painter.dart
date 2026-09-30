@@ -1,12 +1,16 @@
-/// 云层 painter：三朵贝塞尔手绘云，随 60s 基循环做水平漂移。
+/// 云层 painter：三朵云随 60s 基循环做水平漂移。
 ///
-/// 画法思路：
+/// candy 画法（poly < 0.5）：
 /// 1) 云形 = 微起伏底边 + 三段大 puff 的贝塞尔顶缘，所有锚点/控制点按固定种子抖动
 ///    —— 每次绘制形状完全一致（帧间不闪），但边缘带手绘毛边；
 /// 2) 上色分三笔：先填云白，再压一圈主描边，最后错位一条更淡更粗的铅笔复线
-///    （模拟草稿的双线感），全部 round cap/join；
-/// 3) 漂移用「跨距取模」：progress 走完整数个跨距（含左右出屏余量），
-///    循环回到 0 时位置严格连续，看不出接缝。
+///    （模拟草稿的双线感），全部 round cap/join。
+///
+/// lowPoly 画法（poly ≥ 0.5）：多边形云——六边形冠 + 梯形底两个平涂面
+/// （底面暗一档），轮廓与接缝一律黑描边，不用曲线、不用复线。
+///
+/// 两种画法共用「跨距取模」漂移：progress 走完整数个跨距（含左右出屏余量），
+/// 循环回到 0 时位置严格连续，看不出接缝。
 library;
 
 import 'dart:math' as math;
@@ -52,6 +56,7 @@ class CloudPainter extends CustomPainter {
     required this.progress,
     required this.fill,
     required this.line,
+    this.poly = 0,
   });
 
   /// 0~1 的 60s 循环相位（由 SkyBackground 的唯一循环控制器推导）。
@@ -62,6 +67,9 @@ class CloudPainter extends CustomPainter {
 
   /// 描边色。
   final Color line;
+
+  /// LowPoly 度 0~1：过 0.5 换成多边形云（形状不插值，颜色照常 lerp）。
+  final double poly;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -74,21 +82,98 @@ class CloudPainter extends CustomPainter {
       final h = 88.0 * spec.scale;
       final x = -_margin + ((spec.baseX + progress) * span) % span;
       final y = size.height * spec.yFrac;
-      final path = _cloudPath(w, h, spec.seed);
 
       canvas.save();
       canvas.translate(x, y);
 
-      // 第一笔：云体填充（微透，让天空的光透上来一点）
-      canvas.drawPath(path, Paint()..color = fill.withValues(alpha: 0.94));
-      // 第二笔：主描边，勾出手绘轮廓
-      canvas.drawPath(path, handStroke(color: line, width: 1.6, alpha: 0.55));
-      // 第三笔：铅笔复线——错开约 1.5px 再描一条更淡的粗线，草稿感的关键
-      canvas.translate(1.5, 1.8);
-      canvas.drawPath(path, handStroke(color: line, width: 2.8, alpha: 0.16));
+      if (poly >= 0.5) {
+        _paintPolyCloud(canvas, w, h, spec.seed);
+      } else {
+        _paintHandCloud(canvas, w, h, spec.seed);
+      }
 
       canvas.restore();
     }
+  }
+
+  /// candy 一笔：填充 → 主描边 → 错位铅笔复线（草稿感的三件套）。
+  void _paintHandCloud(Canvas canvas, double w, double h, int seed) {
+    final path = _cloudPath(w, h, seed);
+    // 第一笔：云体填充（微透，让天空的光透上来一点）
+    canvas.drawPath(path, Paint()..color = fill.withValues(alpha: 0.94));
+    // 第二笔：主描边，勾出手绘轮廓
+    canvas.drawPath(path, handStroke(color: line, width: 1.6, alpha: 0.55));
+    // 第三笔：铅笔复线——错开约 1.5px 再描一条更淡的粗线，草稿感的关键
+    canvas.translate(1.5, 1.8);
+    canvas.drawPath(path, handStroke(color: line, width: 2.8, alpha: 0.16));
+  }
+
+  /// LowPoly 一笔：六边形冠（上块）+ 梯形底（下块）两块平涂面，
+  /// 底面压暗一档造出「折下来的那个面」，块面与接缝统一黑描边。
+  void _paintPolyCloud(Canvas canvas, double w, double h, int seed) {
+    final (crown, base) = _polyCloudPaths(w, h, seed);
+    final ink = line; // 此时 line 已是 #141414（SkyBackground 按 poly 插值过来）
+
+    canvas.drawPath(crown, Paint()..color = fill);
+    canvas.drawPath(
+      base,
+      Paint()
+        ..color = Color.lerp(fill, const Color(0xFF1F3B63), 0.18)!.withValues(alpha: 1),
+    );
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.6
+      ..strokeJoin = StrokeJoin.round
+      ..strokeCap = StrokeCap.round
+      ..color = ink;
+    canvas.drawPath(crown, stroke);
+    canvas.drawPath(base, stroke);
+  }
+
+  /// 多边形云的两个闭合面：整朵云的折线外轮廓 + 压在下缘的暗面梯形。
+  ///
+  /// 暗面**叠画**在外轮廓之上（而不是拼接），两块共用底边顶点——
+  /// 这样无论折线怎么抖都不会在接缝处漏出天空底色。
+  /// 锚点只抖 ±1.6px：折线要「硬」，抖多了就软回手绘云了。
+  (Path, Path) _polyCloudPaths(double w, double h, int seed) {
+    final rng = math.Random(seed);
+    Offset pt(double x, double y) =>
+        Offset(x * w + handJitter(rng, 1.6), y * h + handJitter(rng, 1.6));
+
+    Path polygon(List<(double, double)> pts) {
+      final path = Path();
+      for (var i = 0; i < pts.length; i++) {
+        final p = pt(pts[i].$1, pts[i].$2);
+        i == 0 ? path.moveTo(p.dx, p.dy) : path.lineTo(p.dx, p.dy);
+      }
+      path.close();
+      return path;
+    }
+
+    // 外轮廓：三处鼓包全部用折线（六边形冠 + 折线收底）
+    final crown = polygon(const [
+      (0.04, 0.68),
+      (0.14, 0.34),
+      (0.38, 0.10),
+      (0.66, 0.06),
+      (0.88, 0.26),
+      (1.00, 0.54),
+      (0.92, 0.84),
+      (0.50, 0.94),
+      (0.16, 0.88),
+    ]);
+
+    // 暗面：沿下缘切出的梯形（与外轮廓共用底边三点 + 起点 A）
+    final base = polygon(const [
+      (0.04, 0.68), // = 外轮廓起点 A
+      (0.48, 0.62),
+      (0.97, 0.60),
+      (0.92, 0.84), // = 外轮廓底边
+      (0.50, 0.94),
+      (0.16, 0.88),
+    ]);
+
+    return (crown, base);
   }
 
   /// 构造单朵云的闭合路径：底边微起伏 → 右侧收拢 → 顶部三个 puff → 左侧回落。
@@ -136,7 +221,8 @@ class CloudPainter extends CustomPainter {
   bool shouldRepaint(CloudPainter oldDelegate) =>
       oldDelegate.progress != progress ||
       oldDelegate.fill != fill ||
-      oldDelegate.line != line;
+      oldDelegate.line != line ||
+      oldDelegate.poly != poly;
 
   @override
   // 纯装饰层没有语义，恒 false 避免每帧触发语义树更新

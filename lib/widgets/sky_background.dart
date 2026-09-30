@@ -78,7 +78,7 @@ class _SkyBackgroundState extends State<SkyBackground>
     final nextStyle = AppStyleNotifier.current.value;
     final nextArt = ArtStyleNotifier.current.value;
     // 去重要同时比天色与画风：只比天色会漏掉「同一档天色下换画风」，
-    // 旧纸↔糖果就不再触发过渡（画面干跳一下）。
+    // LowPoly↔糖果就不再触发过渡（画面干跳一下）。
     if (!mounted || (nextStyle == _toStyle && nextArt == _toArt)) return;
     // 关键：按当前 fade 进度把「屏幕上正在显示的插值中间态」快照成新起点。
     // 旧写法 _from = _to 拿的是上一次的目标皮肤：日光→星夜进行到一半再点黄昏，
@@ -153,16 +153,17 @@ class _SkyBackgroundState extends State<SkyBackground>
     final night = s.night;
 
     // 云色随画风走：糖果是「保卫萝卜泡云」（灰蓝描边），
-    // 旧纸是「纸上晕开的淡墨团」（暖褐描边）——两套各自按夜色深浅调完，
-    // 再按画风过渡量 s.aged 插值，换画风时云也一起 600ms 渐变而不是硬切。
+    // LowPoly 是「白面黑边的多边形块」（描边恒为 #141414，填充昼白夜蓝灰）——
+    // 两套各自按夜色深浅调完，再按画风过渡量 s.poly 插值，
+    // 换画风时云也一起 600ms 渐变而不是硬切。
     final candyFill = Color.lerp(
       ShiguangColors.cloudWhite,
       ShiguangColors.nightTop,
       night * 0.5,
     )!;
-    final agedFill = Color.lerp(
-      const Color(0xFFF8F1DC), // 干纸上的淡云
-      const Color(0xFF4E4230), // 暗纸上的云：比夜纸亮一档才有体积
+    final polyFill = Color.lerp(
+      const Color(0xFFFFFFFF), // 白天：纯白平涂面
+      const Color(0xFFA8BEDC), // 星夜：月光下的蓝灰面
       night,
     )!;
     final candyLine = Color.lerp(
@@ -170,13 +171,9 @@ class _SkyBackgroundState extends State<SkyBackground>
       ShiguangColors.nightMid,
       night,
     )!;
-    final agedLine = Color.lerp(
-      const Color(0xFF9A8A6B), // 旧云的褐线（插图描线）
-      const Color(0xFF6A5B44),
-      night,
-    )!;
-    final cloudFill = Color.lerp(candyFill, agedFill, s.aged)!;
-    final cloudLine = Color.lerp(candyLine, agedLine, s.aged)!;
+    final cloudFill = Color.lerp(candyFill, polyFill, s.poly)!;
+    // LowPoly 的云描边不随夜色变：黑线就是它的画风签名
+    final cloudLine = Color.lerp(candyLine, ShiguangColors.polyOutline, s.poly)!;
     // 远坡混入地平线光 = 空气透视（近坡用纯草色）
     final hillBack = Color.lerp(grass, horizon, 0.42)!;
 
@@ -185,10 +182,15 @@ class _SkyBackgroundState extends State<SkyBackground>
     return Stack(
       fit: StackFit.expand,
       children: [
-        // 1) 天空三段渐变（静态层：仅换肤时重绘，引擎可缓存）
+        // 1) 天空三段渐变 / LowPoly 三段硬色带（静态层：仅换肤时重绘）
         RepaintBoundary(
           child: CustomPaint(
-            painter: SkyGradientPainter(top: top, mid: mid, horizon: horizon),
+            painter: SkyGradientPainter(
+              top: top,
+              mid: mid,
+              horizon: horizon,
+              poly: s.poly,
+            ),
             isComplex: true,
           ),
         ),
@@ -215,20 +217,28 @@ class _SkyBackgroundState extends State<SkyBackground>
         // 4) 云（漂移逐帧；独立边界 = 地图层不陪跑）
         RepaintBoundary(
           child: CustomPaint(
-            painter: CloudPainter(progress: p, fill: cloudFill, line: cloudLine),
+            painter: CloudPainter(
+              progress: p,
+              fill: cloudFill,
+              line: cloudLine,
+              poly: s.poly,
+            ),
             willChange: true,
           ),
         ),
-        // 5) 双层草坡（静态层：换肤变色，循环 tick 指纹不变不重绘）
+        // 5) 双层草坡 / 多边形山峦（静态层：换肤变色，循环 tick 指纹不变不重绘）
         RepaintBoundary(
           child: CustomPaint(
-            painter: HillsPainter(back: hillBack, front: grass),
+            painter: HillsPainter(back: hillBack, front: grass, poly: s.poly),
             isComplex: true,
           ),
         ),
-        // 6) 宣纸噪点（完全静态）
-        const RepaintBoundary(
-          child: CustomPaint(painter: PaperGrainPainter(), isComplex: true),
+        // 6) 宣纸噪点（静态；LowPoly 的色块要干净，过渡到它时噪点同步淡出）
+        RepaintBoundary(
+          child: CustomPaint(
+            painter: PaperGrainPainter(poly: s.poly),
+            isComplex: true,
+          ),
         ),
       ],
     );
@@ -251,11 +261,11 @@ class _BlendState {
     required this.rayOp,
     required this.starOp,
     required this.night,
-    required this.aged,
+    required this.poly,
   });
 
   /// 从「天色 × 画风」令牌推导终态：
-  /// 布尔开关折成 0/1，夜色与画风（旧纸度）也折成可插值的 0/1。
+  /// 布尔开关折成 0/1，夜色与画风（LowPoly 度）也折成可插值的 0/1。
   ///
   /// 走 [tokensFor] 纯函数（显式传画风）而不是 skyOf 全局包装，
   /// 因为换画风的瞬间需要的是「目标画风」的令牌，而非可能尚未落定的全局读数。
@@ -270,7 +280,7 @@ class _BlendState {
       rayOp: tokens.showSunRays ? 1.0 : 0.0,
       starOp: tokens.showStars ? 1.0 : 0.0,
       night: style == AppStyle.night ? 1.0 : 0.0,
-      aged: art == ArtStyle.agedInk ? 1.0 : 0.0,
+      poly: art == ArtStyle.lowPoly ? 1.0 : 0.0,
     );
   }
 
@@ -289,9 +299,11 @@ class _BlendState {
   /// 夜色程度 0/1：决定云的灰蓝深浅（日/黄昏云白，星夜云转月光色）。
   final double night;
 
-  /// 旧纸度 0/1（画风轴的可插值投影）：糖果 0 → 油墨旧纸 1，
-  /// 决定云色等「画风特有」图层在 crossfade 中间的混入比例。
-  final double aged;
+  /// LowPoly 度 0/1（画风轴的可插值投影）：糖果 0 → LowPoly 1。
+  /// 两个用途：① 云色/噪点等「画风特有」图层按它逐通道混色、淡入淡出；
+  /// ② 形状分支（硬色带 / 多边形山云）按它过 0.5 换形——
+  /// 形状换在 crossfade 中点，前后颜色仍在插值，因此切画风不闪屏。
+  final double poly;
 
   /// 两态按 t∈[0,1] 插值：颜色逐通道（Color.lerp），开关量线性过渡——
   /// 换天色、换画风与连续换肤共用这一条路径，保证任意时刻都能冻结中间态。
@@ -305,7 +317,7 @@ class _BlendState {
       rayOp: a.rayOp + (b.rayOp - a.rayOp) * t,
       starOp: a.starOp + (b.starOp - a.starOp) * t,
       night: a.night + (b.night - a.night) * t,
-      aged: a.aged + (b.aged - a.aged) * t,
+      poly: a.poly + (b.poly - a.poly) * t,
     );
   }
 }

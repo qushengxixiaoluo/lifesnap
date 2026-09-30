@@ -10,9 +10,16 @@
 /// 三套皮肤（日光/黄昏/星夜）变的是天空（SkyBackground 在 A 轨），
 /// 地图上的糖果扣与公路在任何天空下都保持同一套高饱和漆面，
 /// 这正是糖果塔防「UI 是玩具、背景是舞台」的层次关系。
+///
+/// 例外只有一个：描边色。画风换到 LowPoly 时轮廓要变成 #141414 近黑，
+/// 所以地图上的描边一律改调画风感知的 `outlineNow()/outlineFor(art)`
+/// （app_style 提供），本文件的 [CandyColors.outline] 只作「糖果端点」的
+/// 命名入口与单一来源（值取自 ShiguangColors.candyOutline，勿手改字面量）。
 library;
 
 import 'package:flutter/material.dart';
+
+import '../../app/app_style.dart';
 
 class CandyColors {
   CandyColors._();
@@ -21,7 +28,9 @@ class CandyColors {
 
   /// 统一描边：深巧克力棕。一切形状厚描边 3-5px 都用它，
   /// 代替旧版的墨棕细线，轮廓要「玩具感」不要「纸片感」。
-  static const outline = Color(0xFF4A2C17);
+  ///
+  /// 只代表**糖果画风**这一端；需要随画风切换的描边请调 outlineNow()。
+  static const outline = ShiguangColors.candyOutline;
 
   /// 奶油面板底（头部木牌、空日素扣的漆面基色）。
   static const cream = Color(0xFFFFF5DC);

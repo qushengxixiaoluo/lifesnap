@@ -4,7 +4,7 @@
 ///
 /// 【双维度模型】（用户纠正后的正确形态——画风不是天色的第四个枚举值）：
 /// - 天色轴 [AppStyle]：日光 / 黄昏 / 星夜——天空的时间，枚举与语义完全不动；
-/// - 画风轴 [ArtStyle]：糖果手绘（现状）/ 油墨旧纸——画面的材质。
+/// - 画风轴 [ArtStyle]：糖果手绘（现状）/ LowPoly 描边——画面的材质。
 /// 两轴正交，共 2×3 令牌矩阵：每种画风都必须适配三档天色（见 [tokensFor]）。
 ///
 /// 并行纪律：五条轨只 import 不修改；配色调整上报编排者统一改。
@@ -52,11 +52,11 @@ class AppStyleNotifier {
 /// 渲染画风（第二根轴，与 [AppStyle] 天色轴正交）。
 ///
 /// 为什么不并进 AppStyle 当「第四个皮肤」：天色回答「现在是什么时候」，
-/// 画风回答「这幅画用什么材质画」。日光下的旧信纸、黄昏下的旧信纸、
-/// 星夜下的旧信纸是三张不同的画面——只有两根独立的轴才表达得出来。
+/// 画风回答「这幅画用什么材质画」。日光下的低多边形、黄昏下的低多边形、
+/// 星夜下的低多边形是三张不同的画面——只有两根独立的轴才表达得出来。
 enum ArtStyle {
   candy, // 糖果手绘：保卫萝卜式厚描边果冻漆面（现状，默认）
-  agedInk, // 油墨旧纸：老式油墨印在泛黄信纸上，旧书插图味
+  lowPoly, // LowPoly 描边：低多边形平面色块 + #141414 近黑描边（贴纸感）
 }
 
 /// 画风全局开关（形态照抄 [AppStyleNotifier]，但持久化键分开）。
@@ -70,11 +70,17 @@ class ArtStyleNotifier {
   static const _prefsKey = 'artMode';
 
   /// 启动时从 SharedPreferences 恢复（main 里 await 调用）。
+  ///
+  /// 迁移说明：第二画风曾叫 agedInk（油墨旧纸），按用户指令整体替换为
+  /// lowPoly 后，老用户 prefs 里仍存着旧值 'agedInk'。这里做一次性映射
+  /// （键 artMode 不变）——不映射的话旧值会掉进 orElse 被打回糖果默认，
+  /// 等于升级后静默换肤。一天的迁移窗口：下次 save 就会写成新名。
   static Future<void> load(SharedPreferences prefs) async {
     final v = prefs.getString(_prefsKey);
     if (v != null) {
+      final normalized = v == 'agedInk' ? ArtStyle.lowPoly.name : v;
       current.value = ArtStyle.values.firstWhere(
-        (a) => a.name == v,
+        (a) => a.name == normalized,
         orElse: () => ArtStyle.candy,
       );
     }
@@ -113,11 +119,16 @@ class ShiguangColors {
   static const wood = Color(0xFFB98B5E); // 木色（卡片骨架）
   static const leafDark = Color(0xFF4E7A4A); // 深叶绿（强调）
 
-  // —— 油墨旧纸（旧信纸画风）——
-  static const agedInkText = Color(0xFF2B2620); // 旧信纸正文墨色（黑褐墨，非纯黑）
-  static const agedPaperText = Color(0xFFE7DCC2); // 暗墨夜读下淡纸色文字
-  static const cinnabar = Color(0xFFB5432E); // 朱砂：旧信纸印泥色的日间点缀
-  static const cinnabarBright = Color(0xFFD9785F); // 朱砂提亮：暗底上的同一位点缀
+  // —— 画风描边的两个端点（见 [outlineFor]：一切形状描边只从这里取）——
+  /// 糖果描边：深巧克力棕（与地图轨 CandyColors.outline 同值，单一来源）。
+  static const candyOutline = Color(0xFF4A2C17);
+
+  /// LowPoly 描边：近黑——低多边形的面与面之间靠黑线分界（贴纸/赛璐璐感）。
+  static const polyOutline = Color(0xFF141414);
+
+  // —— LowPoly 文字 ——
+  /// LowPoly 星夜的冷白字：压在深蓝底上，与黑描边同一套「无彩」墨色体系。
+  static const polyNightText = Color(0xFFE9F0FA);
 
   // —— 状态语义色 ——
   static const completedGold = Color(0xFFE3B23C); // 已完成节点金描边
@@ -153,14 +164,15 @@ class SkyTokens {
 
 /// 天色 × 画风 → 天空令牌的 **纯函数**（2×3 矩阵，不读任何全局状态，可直接单测）。
 ///
-/// - candy 分支原样返回既有三档值：糖果画风的观感不得因新增画风轴回退；
-/// - agedInk 分支按「旧信纸」立意给三档天色各配一张纸（见 [_agedInkTokens]）。
+/// - candy 分支原样返回既有三档值：糖果画风的观感不得因换画风轴回退；
+/// - lowPoly 分支按「低多边形平面风」给三档天色各配一组高饱和平涂色
+///   （见 [_lowPolyTokens]，色值即用户给定的六边形调色板）。
 SkyTokens tokensFor(AppStyle time, ArtStyle art) {
   switch (art) {
     case ArtStyle.candy:
       return _candyTokens(time);
-    case ArtStyle.agedInk:
-      return _agedInkTokens(time);
+    case ArtStyle.lowPoly:
+      return _lowPolyTokens(time);
   }
 }
 
@@ -198,43 +210,42 @@ SkyTokens _candyTokens(AppStyle time) {
   }
 }
 
-/// 油墨旧纸 × 三档天色：老式油墨印在泛黄信纸上，每档天色是一张不同的纸。
+/// LowPoly × 三档天色：低多边形平面风——饱和度高、色块干净，
+/// 三段色本身就是可以**直接平涂**的硬色带（天空层据此画三条水平带，见
+/// SkyGradientPainter），山/云也只用这组色做明暗面与 #141414 描边。
 ///
-/// 立意：不做「天空」做「纸面」——三段微渐变是受潮旧纸的深浅，
-/// 山峦像旧书插图的褪色版画；三档一律关星、关光束（旧纸不挂星、不打光束）。
-SkyTokens _agedInkTokens(AppStyle time) {
+/// 星 / 光束开关沿用糖果画风各天色的现行为（用户约定：lowPoly 有星有束的
+/// 档照旧，即每档与 _candyTokens 同档完全一致——由测试逐档坐实）。
+SkyTokens _lowPolyTokens(AppStyle time) {
   switch (time) {
     case AppStyle.dayLight:
-      // 明亮信纸：日光下的泛黄信纸，受潮处深、纸面居中、边角浅
       return const SkyTokens(
-        top: Color(0xFFE8D8AE),
-        mid: Color(0xFFF0E1BD),
-        horizon: Color(0xFFF5EACB),
-        glow: Color(0xFFA08B6B), // 淡墨褐：旧书插图的晕染光
-        grass: Color(0xFF9A9B6E), // 褪色橄榄：印旧了的绿
+        top: Color(0xFF5FA8E0), // 天顶蓝（平涂带①）
+        mid: Color(0xFF8FC8EF), // 中段天蓝（平涂带②）
+        horizon: Color(0xFFC8E8FA), // 地平浅蓝（平涂带③）
+        glow: Color(0xFFFFE066), // 正午光斑黄
+        grass: Color(0xFF4CAF50), // 鲜绿草地
         showStars: false,
         showSunRays: false,
       );
     case AppStyle.sunset:
-      // 琥珀旧纸：黄昏把纸烤出橘斑的受潮感
       return const SkyTokens(
-        top: Color(0xFFE2C489),
-        mid: Color(0xFFEDD6A4),
-        horizon: Color(0xFFF0E0B8),
-        glow: Color(0xFFC08A4A), // 橙褐：落日透过旧纸
-        grass: Color(0xFF85855C), // 暗橄榄
+        top: Color(0xFFFF7E42), // 晚霞橙
+        mid: Color(0xFFFFA85C),
+        horizon: Color(0xFFFFD29B),
+        glow: Color(0xFFFFB347), // 落日橙金
+        grass: Color(0xFF6B5B95), // 紫褐草地（黄昏的冷阴影）
         showStars: false,
         showSunRays: false,
       );
     case AppStyle.night:
-      // 暗墨夜读：深墨褐纸 + 昏灯——夜里读旧信，不是靛蓝夜空
       return const SkyTokens(
-        top: Color(0xFF2A231B),
-        mid: Color(0xFF33291D),
-        horizon: Color(0xFF3A2E20),
-        glow: Color(0xFF9C8A66), // 昏灯色光晕
-        grass: Color(0xFF4A4A38),
-        showStars: false,
+        top: Color(0xFF162447), // 深靛夜空
+        mid: Color(0xFF27406E),
+        horizon: Color(0xFF3B5B94),
+        glow: Color(0xFFA8C8FF), // 月光蓝
+        grass: Color(0xFF1F5C4C), // 深青草地
+        showStars: true, // 与糖果星夜一致：这一档本来就有星
         showSunRays: false,
       );
   }
@@ -249,12 +260,12 @@ SkyTokens skyOf(AppStyle style) =>
     tokensFor(style, ArtStyleNotifier.current.value);
 
 /// 文字色矩阵（纯函数）：糖果逻辑原样保留；
-/// 旧信纸白天是纸上的墨字、星夜是暗纸上的淡字（夜读对比度）。
+/// LowPoly 亮底（日光/黄昏）压近黑字、星夜压冷白字——与黑描边同一套墨色体系。
 Color textColorFor(AppStyle time, ArtStyle art) {
-  if (art == ArtStyle.agedInk) {
+  if (art == ArtStyle.lowPoly) {
     return time == AppStyle.night
-        ? ShiguangColors.agedPaperText
-        : ShiguangColors.agedInkText;
+        ? ShiguangColors.polyNightText
+        : ShiguangColors.polyOutline;
   }
   return time == AppStyle.night
       ? ShiguangColors.paper
@@ -264,3 +275,16 @@ Color textColorFor(AppStyle time, ArtStyle art) {
 /// 文字色全局入口：与 [skyOf] 同构，读当前画风后转发 [textColorFor]。
 Color textColorOf(AppStyle time) =>
     textColorFor(time, ArtStyleNotifier.current.value);
+
+/// 画风感知的描边色（纯函数，形态照 [tokensFor] / [textColorFor]）：
+/// candy = 深巧克力棕（玩具漆面描边，现值）、lowPoly = #141414 近黑。
+///
+/// 为什么要有它：地图三件套（day_node / calendar_map_page / map_path_painter）
+/// 以前写死 CandyColors.outline，换画风时描边纹丝不动——现在全部改调本函数，
+/// 于是「糖果棕描边 ↔ 黑描边」跟着画风走，调用点不用各自 if/else。
+Color outlineFor(ArtStyle art) => art == ArtStyle.lowPoly
+    ? ShiguangColors.polyOutline
+    : ShiguangColors.candyOutline;
+
+/// 描边全局入口：与 [skyOf] 同构，读当前画风后转发 [outlineFor]。
+Color outlineNow() => outlineFor(ArtStyleNotifier.current.value);

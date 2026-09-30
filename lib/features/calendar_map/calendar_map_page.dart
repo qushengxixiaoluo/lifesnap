@@ -242,7 +242,7 @@ class _MonthHeader extends StatelessWidget {
   /// 当前皮肤（副行文字/光晕色随皮肤走，保证任何天空下可读）。
   final AppStyle style;
 
-  /// 当前画风（旧纸卡上副行走墨/淡纸字，糖果卡沿用原描边白）。
+  /// 当前画风（LowPoly 副行走画风矩阵文字色，糖果卡沿用原描边白）。
   final ArtStyle art;
 
   final bool canPrev;
@@ -270,12 +270,12 @@ class _MonthHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     // 副行配色随「天色 × 画风」走，且浮在天空上（不在奶油胶囊里）：
     // - 糖果：日间/黄昏用糖果棕压白光晕，星夜用纯白压暗光晕（既有观感不动）；
-    // - 油墨旧纸：直接用画风矩阵的文字色——白天纸上墨字，夜里暗纸淡字，
-    //   否则纯白字会把「泛黄信纸」读成「贴纸」。
+    // - LowPoly：直接用画风矩阵的文字色——亮底近黑字、星夜冷白字，
+    //   否则纯白字会把高饱和平涂天空读成「过曝」。
     final lightSkin = style != AppStyle.night;
-    final statColor = art == ArtStyle.agedInk
+    final statColor = art == ArtStyle.lowPoly
         ? textColorFor(style, art)
-        : (lightSkin ? CandyColors.outline : CandyColors.glossWhite);
+        : (lightSkin ? outlineNow() : CandyColors.glossWhite);
     final statShadow =
         lightSkin ? Colors.white.withValues(alpha: 0.85) : Colors.black.withValues(alpha: 0.5);
     return Padding(
@@ -292,10 +292,10 @@ class _MonthHeader extends StatelessWidget {
           // 玩具感来自「厚边+硬影」而不是 Material elevation。
           gradient: CandyColors.panelFill,
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: CandyColors.outline, width: 3.5),
+          border: Border.all(color: outlineNow(), width: 3.5),
           boxShadow: [
             BoxShadow(
-              color: CandyColors.outline.withValues(alpha: 0.9),
+              color: outlineNow().withValues(alpha: 0.9),
               blurRadius: 0,
               offset: const Offset(0, 3),
             ),
@@ -322,12 +322,13 @@ class _MonthHeader extends StatelessWidget {
                     child: Text(
                       '$year年$month月 · 拾光地图　▾',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      // 非 const：字色取 outlineNow()（随画风切棕/黑）
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800, // 粗体圆润（风格圣经第 8 条）
                         letterSpacing: 1.1,
-                        color: CandyColors.outline,
-                        shadows: [
+                        color: outlineNow(),
+                        shadows: const [
                           // 细描边感用白影模拟：奶油底上描一圈白，字更「贴纸」。
                           Shadow(
                             color: CandyColors.glossWhite,
@@ -383,10 +384,10 @@ class _MonthHeader extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: enabled ? CandyColors.orangeFill : CandyColors.grayFill,
-        border: Border.all(color: CandyColors.outline, width: 2.6),
+        border: Border.all(color: outlineNow(), width: 2.6),
         boxShadow: [
           BoxShadow(
-            color: CandyColors.outline.withValues(alpha: 0.9),
+            color: outlineNow().withValues(alpha: 0.9),
             blurRadius: 0,
             offset: const Offset(0, 2.5),
           ),
@@ -401,7 +402,7 @@ class _MonthHeader extends StatelessWidget {
         tooltip: tooltip,
         // 图标颜色跟按钮状态走：可用＝白（橙面上），禁用＝棕 35%（灰面上）。
         color: CandyColors.glossWhite,
-        disabledColor: CandyColors.outline.withValues(alpha: 0.35),
+        disabledColor: outlineNow().withValues(alpha: 0.35),
         onPressed: enabled ? onPressed : null,
       ),
     );
