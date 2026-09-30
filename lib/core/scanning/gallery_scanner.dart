@@ -47,22 +47,45 @@ class GalleryScanner implements PhotoSourceScanner {
 
     yield const ScanProgress(phase: ScanPhase.listing);
 
-    // 权限流：requestPermissionExtend 一次完成 询问/跳转设置/返回状态 的闭环。
+    // 权限流：首查用 requestPermissionExtend（需要时弹系统授权框的闭环），
+    // 800ms 后的复查用 getPermissionState——两者最终都读同一个 getAuthValue，
+    // 但复查用纯读接口不会在用户刚拒绝后立刻又弹一遍授权框。
+    //
+    // 为什么必须显式收窄成 RequestType.image 而不能用默认的 common（image|video）：
+    // photo_manager 的 Android 判定规则是「请求类型含有的每项权限都必须已在
+    // Manifest 声明且已授予」（PermissionDelegate.havePermission = 声明 && 授权，
+    // getAuthValue 直接建立在此之上）。本应用只读照片，Manifest 只声明了
+    // READ_MEDIA_IMAGES——用默认 common 时，未声明的 READ_MEDIA_VIDEO 恒被判
+    // 为未授权，Android 13 上 getAuthValue 永远返回 denied：用户在系统设置里
+    // 明明已允许照片访问，应用仍报「相册权限未生效」。收窄后判定条件、Manifest
+    // 声明、实际扫描范围（getAssetPathList 也只取 image）三者一致，设置页授权
+    // 返回后首查即通过，不再要求「完全关闭应用重启」。
+    const permissionOption = PermissionRequestOption(
+      androidPermission: AndroidPermission(
+        type: RequestType.image,
+        mediaLocation: false,
+      ),
+    );
     // 已知坑：国产 ROM（MIUI/ColorOS 等）从系统设置授权后返回应用，
     // photo_manager 的权限状态往往还停在旧值——所以首次读到「无权限」时
     // 不立刻判死，等一拍重查一次再下结论。
-    var permission = await PhotoManager.requestPermissionExtend();
+    var permission = await PhotoManager.requestPermissionExtend(
+      requestOption: permissionOption,
+    );
     if (!permission.hasAccess) {
       await Future<void>.delayed(const Duration(milliseconds: 800));
-      permission = await PhotoManager.requestPermissionExtend();
+      permission = await PhotoManager.getPermissionState(
+        requestOption: permissionOption,
+      );
     }
     if (!permission.hasAccess) {
       yield ScanProgress(
         phase: ScanPhase.error,
         errorMessage:
-            '相册权限未生效。请到 系统设置→应用→拾光手册→权限 允许「照片和视频」，'
-            '若选了「仅选定的照片」请选择全部；授权后完全关闭本应用再重新打开扫描。'
-            '（当前状态：${permission.name}）',
+            '相册权限未生效（状态：${permission.name}）。若你刚在系统设置里授权：'
+            '应用在运行中时系统不会把新权限同步给本进程，'
+            '请先从最近任务中彻底划掉本应用，重新打开后再扫描；'
+            '若授权时选了「仅选定的照片」，请选择允许全部照片。',
       );
       return;
     }

@@ -22,6 +22,7 @@ import '../../app/router.dart';
 import '../../core/models/models.dart';
 import '../../widgets/sky_background.dart';
 import '../day_detail/day_detail_launcher.dart';
+import 'candy_colors.dart';
 import 'day_node.dart';
 import 'day_node_layout.dart';
 import 'map_path_painter.dart';
@@ -216,26 +217,32 @@ class _MonthHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
+      // 上边距保持 6：测试断言 chevron 顶边必须贴在 AppBar 下沿
+      // （≥ appbarBottom - 1 且 ≤ +40），加厚胶囊后仍留有余量。
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
-          // 半透明纸条压在天空上，保证深浅皮肤下文字都读得清。
-          color: ShiguangColors.paper.withValues(alpha: 0.62),
+          // 木牌胶囊：奶油底 + 3.5px 深棕厚描边 + 底部实心厚阴影（blur 0），
+          // 玩具感来自「厚边+硬影」而不是 Material elevation。
+          gradient: CandyColors.panelFill,
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: ShiguangColors.wood.withValues(alpha: 0.45),
-          ),
+          border: Border.all(color: CandyColors.outline, width: 3.5),
+          boxShadow: [
+            BoxShadow(
+              color: CandyColors.outline.withValues(alpha: 0.9),
+              blurRadius: 0,
+              offset: const Offset(0, 3),
+            ),
+          ],
         ),
         child: Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.chevron_left),
+            _candyArrow(
+              icon: Icons.chevron_left,
               tooltip: '上一月',
-              // 文字/图标固定墨棕：纸条底色不随皮肤变化，跟着变白反而会看不见。
-              color: ShiguangColors.inkBrown,
-              disabledColor: ShiguangColors.inkBrown.withValues(alpha: 0.3),
-              onPressed: canPrev ? onPrev : null,
+              enabled: canPrev,
+              onPressed: onPrev,
             ),
             Expanded(
               child: Text(
@@ -243,21 +250,66 @@ class _MonthHeader extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 16,
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w800, // 粗体圆润（风格圣经第 8 条）
                   letterSpacing: 1.1,
-                  color: ShiguangColors.inkBrown,
+                  color: CandyColors.outline,
+                  shadows: [
+                    // 细描边感用白影模拟：奶油底上描一圈白，字更「贴纸」。
+                    Shadow(
+                      color: CandyColors.glossWhite,
+                      offset: Offset(0, 1),
+                      blurRadius: 0,
+                    ),
+                  ],
                 ),
               ),
             ),
-            IconButton(
-              icon: const Icon(Icons.chevron_right),
+            _candyArrow(
+              icon: Icons.chevron_right,
               tooltip: '下一月',
-              color: ShiguangColors.inkBrown,
-              disabledColor: ShiguangColors.inkBrown.withValues(alpha: 0.3),
-              onPressed: canNext ? onNext : null,
+              enabled: canNext,
+              onPressed: onNext,
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 左右糖果圆钮：橙面果冻渐变 + 厚棕描边 + 底部实心投影的圆形按钮。
+  /// 首尾月时换成灰面（不可点状态一眼可辨），图标固定白/淡棕保证对比度。
+  Widget _candyArrow({
+    required IconData icon,
+    required String tooltip,
+    required bool enabled,
+    required VoidCallback onPressed,
+  }) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: enabled ? CandyColors.orangeFill : CandyColors.grayFill,
+        border: Border.all(color: CandyColors.outline, width: 2.6),
+        boxShadow: [
+          BoxShadow(
+            color: CandyColors.outline.withValues(alpha: 0.9),
+            blurRadius: 0,
+            offset: const Offset(0, 2.5),
+          ),
+        ],
+      ),
+      child: IconButton(
+        // 约束成 40×40 正圆：默认 48 会把胶囊撑高，chevron 顶边
+        // 有贴 AppBar（+40px 内）的几何断言，见 build 顶部注释。
+        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+        padding: EdgeInsets.zero,
+        icon: Icon(icon),
+        tooltip: tooltip,
+        // 图标颜色跟按钮状态走：可用＝白（橙面上），禁用＝棕 35%（灰面上）。
+        color: CandyColors.glossWhite,
+        disabledColor: CandyColors.outline.withValues(alpha: 0.35),
+        onPressed: enabled ? onPressed : null,
       ),
     );
   }
@@ -267,7 +319,7 @@ class _MonthHeader extends StatelessWidget {
 // 单月地图：路径 + 节点 + 命中层
 // ============================================================================
 
-class _MapMonthView extends ConsumerWidget {
+class _MapMonthView extends ConsumerStatefulWidget {
   final int year;
   final int month;
   final AppStyle style;
@@ -283,12 +335,24 @@ class _MapMonthView extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_MapMonthView> createState() => _MapMonthViewState();
+}
+
+class _MapMonthViewState extends ConsumerState<_MapMonthView> {
+  /// 当前按下的节点下标（-1 = 无）。
+  ///
+  /// 节点自身不挂手势（不变式），所以「按下变矮」的反馈由命中层
+  /// 在 onTapDown/onTapUp 时把按下态下发给对应 DayNode——
+  /// 只重绘这一个节点（各自 RepaintBoundary），天空与路径不陪跑。
+  int _pressedIndex = -1;
+
+  @override
+  Widget build(BuildContext context) {
     // 数据与布局分开取：布局在 LayoutBuilder 里（依赖尺寸），
     // 数据在外面 watch（异步到达后 setState 重建本页）。
     // 加载中/出错 → 空 Map → 整月按空日渲染，地图照样完整好看。
     final metas = ref
-            .watch(monthDayIndexProvider(year * 100 + month))
+            .watch(monthDayIndexProvider(widget.year * 100 + widget.month))
             .value ??
         const <int, DayMeta>{};
     final cache = ref.watch(layoutCacheProvider);
@@ -296,8 +360,8 @@ class _MapMonthView extends ConsumerWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final positions = cache.layoutMonth(
-          year,
-          month,
+          widget.year,
+          widget.month,
           CanvasSize(constraints.maxWidth, constraints.maxHeight),
         );
         if (positions.isEmpty) return const SizedBox.expand();
@@ -310,7 +374,7 @@ class _MapMonthView extends ConsumerWidget {
         final hitRects = <Rect>[];
 
         for (final p in positions) {
-          final dayKey = year * 10000 + month * 100 + p.day;
+          final dayKey = widget.year * 10000 + widget.month * 100 + p.day;
           final meta = metas[dayKey];
           dayKeys.add(dayKey);
           statuses.add(
@@ -340,7 +404,7 @@ class _MapMonthView extends ConsumerWidget {
                   painter: MapPathPainter(
                     nodes: positions,
                     statuses: statuses,
-                    style: style,
+                    style: widget.style,
                   ),
                 ),
               ),
@@ -361,20 +425,37 @@ class _MapMonthView extends ConsumerWidget {
                     status: statuses[i],
                     thumbPath: metas[dayKeys[i]]?.thumbPath,
                     hasSummary: metas[dayKeys[i]]?.hasSummary ?? false,
+                    // 按下反馈：命中层下发，节点只做「变矮」视觉。
+                    pressed: _pressedIndex == i,
                   ),
                 ),
               ),
 
             // 3) 命中层：统一拦下点击，按 Rect 找最近的节点。
+            //    按下瞬间先点亮对应节点（软糖被按进去），抬手清态并开详情；
+            //    拖动翻页被手势竞技场判走时走 onCancel，不留残按下态。
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTapUp: (details) => _onTap(
-                  details.localPosition,
-                  positions,
-                  dayKeys,
-                  hitRects,
-                ),
+                onTapDown: (details) {
+                  final hit = _hitAt(details.localPosition, positions, hitRects);
+                  if (hit != _pressedIndex) {
+                    setState(() => _pressedIndex = hit);
+                  }
+                },
+                onTapUp: (details) {
+                  final hit = _hitAt(details.localPosition, positions, hitRects);
+                  if (_pressedIndex != -1) setState(() => _pressedIndex = -1);
+                  // 详情入口走 openDay 回调（外层 context），绝不用本层 context：
+                  // 一旦走到「无根 scope 自建页面级 scope」的兜底分支，本层就在页面级
+                  // scope 之下，会让 showDayDetail 的兜底 scope 判断失效（详见 CalendarMapPage.build）。
+                  if (hit >= 0) widget.openDay(dayKeys[hit]);
+                },
+                onTapCancel: () {
+                  if (_pressedIndex != -1) {
+                    setState(() => _pressedIndex = -1);
+                  }
+                },
               ),
             ),
           ],
@@ -383,12 +464,9 @@ class _MapMonthView extends ConsumerWidget {
     );
   }
 
-  void _onTap(
-    Offset point,
-    List<NodePosition> positions,
-    List<int> dayKeys,
-    List<Rect> rects,
-  ) {
+  /// 命中判定：点落在哪个 Rect 里；多个候选（理论上不相交）取圆心最近的。
+  /// 返回下标，未命中返回 -1（按下态用 -1 表示「没按到任何节点」）。
+  int _hitAt(Offset point, List<NodePosition> positions, List<Rect> rects) {
     var best = -1;
     var bestDist = double.infinity;
     for (var i = 0; i < rects.length; i++) {
@@ -401,9 +479,6 @@ class _MapMonthView extends ConsumerWidget {
         best = i;
       }
     }
-    // 详情入口走 openDay 回调（外层 context），绝不用本层 context：
-    // 一旦走到「无根 scope 自建页面级 scope」的兜底分支，本层就在页面级
-    // scope 之下，会让 showDayDetail 的兜底 scope 判断失效（详见 CalendarMapPage.build）。
-    if (best >= 0) openDay(dayKeys[best]);
+    return best;
   }
 }

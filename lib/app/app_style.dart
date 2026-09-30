@@ -109,7 +109,8 @@ SkyTokens skyOf(AppStyle style) {
         horizon: ShiguangColors.skyHorizon,
         glow: ShiguangColors.sunGlow,
         grass: ShiguangColors.grassGreen,
-        showSunRays: true,
+        // 关闭放射光束：保卫萝卜卡通风不要新海诚式细光束（用户嫌丑 + 风格圣经要求）
+        showSunRays: false,
       );
     case AppStyle.sunset:
       return const SkyTokens(
@@ -118,7 +119,7 @@ SkyTokens skyOf(AppStyle style) {
         horizon: Color(0xFFFFD9A0), // 金色地平线
         glow: Color(0xFFFFC46B),
         grass: Color(0xFF6E9A5B), // 偏暗的草绿
-        showSunRays: true,
+        showSunRays: false, // 同日光：卡通平涂不要放射光束
       );
     case AppStyle.night:
       return const SkyTokens(

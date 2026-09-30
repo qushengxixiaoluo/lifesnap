@@ -1,26 +1,33 @@
-/// 闯关地图 · 单个日节点（五种状态的视觉实现）
+/// 闯关地图 · 单个日节点（糖果风五状态视觉实现）
+///
+/// 风格圣经：保卫萝卜 / 燃烧的蔬菜 Q版糖果塔防——节点是「按下去会弹的
+/// 软糖圆扣」：上亮下暗果冻渐变 + 4px 深巧克力厚描边 + 顶部高光弧 +
+/// 底部实心厚阴影（不是 Material elevation）。
 ///
 /// 五种状态与视觉语义：
 /// | 状态 | 视觉 | 为什么这样画 |
 /// |------|------|--------------|
-/// | [DayNodeStatus.withSummary] | 圆形裁切首图 + 金描边 + 金勾 | 有总结 = 通关，金色是完成令牌 |
-/// | [DayNodeStatus.withPhotos]  | 圆形裁切首图 + 白描边          | 有素材未总结 = 待办，白描边够醒目 |
-/// | [DayNodeStatus.pastEmpty]   | 纸色空心圆 + 数字              | 过去空白日 = 纸面留白，不刺眼 |
-/// | [DayNodeStatus.today]       | 脉冲光环 + 「当前关卡」徽章    | 只有今日会动，视线第一落点 |
-/// | [DayNodeStatus.future]      | 雾化 + 小锁                   | 未解锁的关卡，暗示「还没到」 |
+/// | [DayNodeStatus.withSummary] | 金橙果冻扣 + 右上金星徽章 | 通关 = 金色星星，比勾更「关卡」 |
+/// | [DayNodeStatus.withPhotos]  | 圆形裁切首图 + 白厚描边      | 有素材未总结 = 待办，白描边够醒目 |
+/// | [DayNodeStatus.pastEmpty]   | 奶油素扣 + 棕数字            | 过去空白日 = 素扣，不刺眼 |
+/// | [DayNodeStatus.today]       | 大一圈粉扣 + 彩带徽章脉冲    | 只有今日会动，视线第一落点 |
+/// | [DayNodeStatus.future]      | 灰扣 + 小锁泡泡              | 未解锁的关卡，暗示「还没到」 |
 ///
 /// 性能取舍：
 /// - 脉冲用独立 AnimationController（1.6s 循环），只重绘自己这一个小方块；
 ///   外层由页面包 RepaintBoundary，天空与路径层完全不参与重绘。
 /// - 节点自身**不挂手势**：命中统一交给页面的 Rect 列表层，
 ///   既避免 31 个 GestureDetector 抢手势竞技场，也让命中逻辑可批量测试。
+///   「按下反馈」因此由页面把 pressed 状态下发（见 calendar_map_page）。
 library;
+
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../app/app_style.dart';
 import '../../core/models/models.dart';
 import '../../core/thumbnails/thumb_image.dart';
+import 'candy_colors.dart';
 import 'day_node_layout.dart';
 
 // ============================================================================
@@ -68,6 +75,10 @@ String statusLabelOf(DayNodeStatus status) {
   }
 }
 
+/// 今日圆体比常规大一圈的倍率：视线第一落点要「跳出来」，
+/// 但 1.12 控制在命中半径（1.2r）内，不侵占相邻节点的命中圆。
+const double kTodayScale = 1.12;
+
 // ============================================================================
 // 节点组件
 // ============================================================================
@@ -84,12 +95,16 @@ class DayNode extends StatefulWidget {
   /// 五状态之一，决定圆体样式、光环与徽章。
   final DayNodeStatus status;
 
-  /// 当日首图路径；为空（或该状态不展示图）时回退为纸色圆。
+  /// 当日首图路径；为空（或该状态不展示图）时回退为果冻圆。
   final String? thumbPath;
 
-  /// 是否已有 AI 总结——只影响「今日」节点是否补一枚金勾
+  /// 是否已有 AI 总结——只影响「今日」节点是否补一枚金星徽章
   ///（其它状态本身就是由 hasSummary 推导出来的）。
   final bool hasSummary;
+
+  /// 是否处于按下态（由页面命中层下发，节点自己不挂手势）。
+  /// 按下 = 整颗糖扣下移变矮，模拟软糖被按进去。
+  final bool pressed;
 
   const DayNode({
     super.key,
@@ -98,6 +113,7 @@ class DayNode extends StatefulWidget {
     required this.status,
     this.thumbPath,
     this.hasSummary = false,
+    this.pressed = false,
   });
 
   @override
@@ -147,6 +163,9 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
     final r = _r;
     final status = widget.status;
     final hasThumb = widget.thumbPath != null;
+    final isToday = status == DayNodeStatus.today;
+    // 今日大一圈：圆心不变，只放大绘制半径（布局算法不动，位置不变）。
+    final bodyR = isToday ? r * kTodayScale : r;
 
     return Semantics(
       // 点击由页面统一的命中层负责，这里只负责「读出来是哪一天、什么状态」。
@@ -159,9 +178,9 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
           clipBehavior: Clip.none, // 徽章与光环要溢出节点方块，不能被裁
           alignment: Alignment.center,
           children: [
-            if (status == DayNodeStatus.today) _buildPulseRing(r),
-            _buildCircle(r, hasThumb: hasThumb),
-            if (status == DayNodeStatus.today) _buildLevelBadge(r),
+            if (isToday) _buildPulseRing(bodyR),
+            _buildPressed(bodyR, hasThumb: hasThumb),
+            if (isToday) _buildLevelBadge(r, bodyR),
           ],
         ),
       ),
@@ -169,10 +188,26 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
   }
 
   // ---------------------------------------------------------------------
-  // 今日：脉冲光环
+  // 按下反馈（页面命中层下发 pressed，这里只做视觉）
   // ---------------------------------------------------------------------
 
-  Widget _buildPulseRing(double r) {
+  /// 按下时以底边为锚缩到 0.92——糖扣「陷进去」，放手回弹。
+  /// 用底边锚点而不是中心：中心缩会让人觉得节点在漂，底边缩才像被按住。
+  Widget _buildPressed(double bodyR, {required bool hasThumb}) {
+    return AnimatedScale(
+      scale: widget.pressed ? 0.92 : 1,
+      duration: const Duration(milliseconds: 90),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.bottomCenter,
+      child: _buildCircle(bodyR, hasThumb: hasThumb),
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // 今日：脉冲光环（糖果粉）
+  // ---------------------------------------------------------------------
+
+  Widget _buildPulseRing(double bodyR) {
     return AnimatedBuilder(
       animation: _pulse,
       builder: (context, child) {
@@ -181,13 +216,13 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
         return Transform.scale(scale: 1 + 0.38 * t, child: child);
       },
       child: Container(
-        width: (r + 6) * 2,
-        height: (r + 6) * 2,
+        width: (bodyR + 6) * 2,
+        height: (bodyR + 6) * 2,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           border: Border.all(
-            color: ShiguangColors.todayPulse.withValues(alpha: 0.8),
-            width: 3,
+            color: CandyColors.pink.withValues(alpha: 0.8),
+            width: 3.5,
           ),
         ),
       ),
@@ -195,31 +230,34 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
   }
 
   // ---------------------------------------------------------------------
-  // 今日：当前关卡徽章
+  // 今日：当前关卡彩带徽章
   // ---------------------------------------------------------------------
 
-  Widget _buildLevelBadge(double r) {
+  Widget _buildLevelBadge(double r, double bodyR) {
     return Positioned(
-      // 外层 Stack 被 SizedBox 钉成 2r 高、圆体占满 [0, 2r]，所以偏移必须以
-      // 2r 为基准：顶边 = 圆底边上方 6px（「压在圆下沿」），其余 ~14px 向外探出
-      // （行距净空 ≈75px，远大于外探量，糊不到下一行）。
-      // 曾误写成 top: r - 6（把 2r 的偏移写成了 r），药丸落在节点垂直中部、
-      // 正好盖住今日的日号数字——今日是视线第一落点，几何断言已进单测防回归。
-      top: r * 2 - 6,
+      // 外层 Stack 被 SizedBox 钉成 2r 高、圆心在 (r, r)：
+      // 放大后的圆底边 = r + bodyR（今日 bodyR = 1.12r ≈ 2.12r 处），
+      // 徽章顶边压在圆底边上方 6px（「压在圆下沿」），其余向外探出
+      // （行距净空远大于外探量，糊不到下一行）。
+      // 几何断言在 calendar_map_test：badgeTop ≥ 2r-8 且 badgeBottom ≥ 2r——
+      // r + bodyR - 6 ≥ 2r - 8 恒成立（bodyR ≥ r），r 小到 4 也守住。
+      top: r + bodyR - 6,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
-          color: ShiguangColors.todayPulse,
+          // 彩带徽章：粉底白字，任何皮肤下都是最跳的一枚。
+          gradient: CandyColors.pinkFill,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: ShiguangColors.paper.withValues(alpha: 0.9),
-            width: 1.2,
+            color: CandyColors.outline,
+            width: 2.4,
           ),
           boxShadow: [
+            // 实心厚阴影（blur 0）＝玩具贴纸感，不是 Material elevation。
             BoxShadow(
-              color: ShiguangColors.inkBrown.withValues(alpha: 0.25),
-              blurRadius: 4,
-              offset: const Offset(0, 1),
+              color: CandyColors.outline.withValues(alpha: 0.9),
+              blurRadius: 0,
+              offset: const Offset(0, 2.5),
             ),
           ],
         ),
@@ -228,9 +266,9 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
           style: TextStyle(
             fontSize: 10,
             height: 1.2,
-            fontWeight: FontWeight.w700,
-            // 金底深字：任何皮肤下都清晰，且不随换肤变白而丢失对比度。
-            color: ShiguangColors.inkBrown,
+            fontWeight: FontWeight.w800,
+            // 粉底白字（风格圣经第 8 条）：深棕描边已把字框住，白字最醒目。
+            color: CandyColors.glossWhite,
           ),
         ),
       ),
@@ -246,70 +284,51 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
       case DayNodeStatus.withSummary:
         return _circle(
           r: r,
-          fill: ShiguangColors.paper,
-          borderColor: ShiguangColors.completedGold,
-          borderWidth: 2.6,
-          child: hasThumb ? _thumb() : _number(r),
-          overlay: _topRight(_checkBadge(r)),
+          fill: CandyColors.goldFill,
+          borderWidth: 4,
+          child: hasThumb ? _thumb() : _number(r, onColor: true),
+          overlay: _topRight(_starBadge(r)),
         );
 
       case DayNodeStatus.withPhotos:
         return _circle(
+          // 有图白描边：白扣在任何天空上都跳得出。
           r: r,
-          fill: ShiguangColors.paper,
-          borderColor: ShiguangColors.cloudWhite, // 白描边在蓝天上最跳
-          borderWidth: 2.4,
+          fill: CandyColors.creamFill,
+          borderColor: CandyColors.glossWhite,
+          borderWidth: 4,
           child: hasThumb ? _thumb() : _number(r),
         );
 
       case DayNodeStatus.pastEmpty:
         return _circle(
           r: r,
-          // 「纸色空心圆」：纸底微透，天空能透出来，但数字仍清晰。
-          fill: ShiguangColors.paper.withValues(alpha: 0.88),
-          borderColor: ShiguangColors.wood.withValues(alpha: 0.8),
-          borderWidth: 2,
+          fill: CandyColors.creamFill,
+          borderWidth: 3.5,
           child: _number(r),
         );
 
       case DayNodeStatus.today:
-        // 今日圆体照常显示内容（有图给图、已总结给勾），
+        // 今日圆体照常显示内容（有图给图、已总结给星），
         // 光环与徽章在 build() 里外挂，形成「当前关卡」的强调。
         return _circle(
           r: r,
-          fill: ShiguangColors.paper,
-          borderColor: ShiguangColors.todayPulse,
-          borderWidth: 3,
-          child: hasThumb ? _thumb() : _number(r),
-          overlay: hasThumb && widget.hasSummary ? _topRight(_checkBadge(r)) : null,
+          fill: CandyColors.pinkFill,
+          borderWidth: 4,
+          child: hasThumb ? _thumb() : _number(r, onColor: true),
+          overlay:
+              hasThumb && widget.hasSummary ? _topRight(_starBadge(r)) : null,
         );
 
       case DayNodeStatus.future:
         return _circle(
           r: r,
-          fill: ShiguangColors.paper.withValues(alpha: 0.55),
-          borderColor: ShiguangColors.futureMist.withValues(alpha: 0.9),
-          borderWidth: 2,
+          fill: CandyColors.grayFill,
+          borderWidth: 3.5,
           child: _number(r, alpha: 0.75),
-          // 雾化叠层：自下而上越来越浓，像关卡被雾锁住。
           overlay: Stack(
             clipBehavior: Clip.none,
             children: [
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        ShiguangColors.futureMist.withValues(alpha: 0.18),
-                        ShiguangColors.futureMist.withValues(alpha: 0.62),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
               Positioned(right: -2, top: -2, child: _lockBadge(r)),
             ],
           ),
@@ -317,17 +336,18 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
     }
   }
 
-  /// 统一的圆形容器。
+  /// 统一的果冻圆形容器：
+  /// 果冻渐变填充 + 厚棕描边（有图态换白描边）+ 底部实心厚阴影。
   ///
   /// Container 在有 border 时会把 border 尺寸自动转成 child 的内边距，
   /// 所以 child（缩略图 / 数字）正好落在内圆里，不必手动算 inset；
   /// [overlay] 用 Positioned.fill 铺满**内圆**，其内部再自行定位角标。
   Widget _circle({
     required double r,
-    required Color fill,
-    required Color borderColor,
+    required Gradient fill,
     required double borderWidth,
     required Widget child,
+    Color borderColor = CandyColors.outline,
     Widget? overlay,
   }) {
     return Container(
@@ -335,14 +355,15 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
       height: r * 2,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: fill,
+        gradient: fill, // 上亮下暗 = 软糖的受光面
         border: Border.all(color: borderColor, width: borderWidth),
         boxShadow: [
-          // 轻投影 = 手绘贴纸浮在地图上；星夜皮肤下也能和背景拉开层次。
+          // 底部实心厚阴影：blur 0 + 纯深棕，糖果塔防的「玩具投影」；
+          // 禁止 Material elevation（全仓铁律，靠描边+投影自己画层次）。
           BoxShadow(
-            color: ShiguangColors.inkBrown.withValues(alpha: 0.22),
-            blurRadius: 5,
-            offset: const Offset(0, 2),
+            color: CandyColors.outline.withValues(alpha: 0.92),
+            blurRadius: 0,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
@@ -351,6 +372,8 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
         alignment: Alignment.center,
         children: [
           ClipOval(child: SizedBox.expand(child: child)),
+          // 顶部高光弧压在内容之上、徽章之下：像糖面反光。
+          Positioned.fill(child: CustomPaint(painter: _TopGlossPainter(r))),
           if (overlay != null) Positioned.fill(child: overlay),
         ],
       ),
@@ -366,45 +389,66 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
   Widget _thumb() => ThumbImage(
         sourcePath: widget.thumbPath!,
         size: 128,
-        placeholderColor: ShiguangColors.paperDeep,
+        placeholderColor: CandyColors.creamDark,
       );
 
-  Widget _number(double r, {double alpha = 1}) {
+  /// 日号数字：粗体圆润（w800）+ 一圈深棕描边感阴影（模拟细描边字）。
+  /// 果冻底上用白字，奶油素扣上用深棕字（对比度 ≥ 4.5 的方向）。
+  Widget _number(double r, {double alpha = 1, bool onColor = false}) {
     final day = widget.dayKey % 100;
-    return Text(
+    final base = onColor ? CandyColors.glossWhite : CandyColors.outline;
+    // 必须包 Center：裸 Text 放进 SizedBox.expand 会被压成
+    // 「宽度顶满 + 高度顶满」，文字按 start 对齐画在左上角（数字错位的根因）。
+    return Center(
+      child: Text(
       '$day',
       style: TextStyle(
         fontSize: (r * 0.78).clamp(9.0, 34.0).toDouble(),
-        fontWeight: FontWeight.w700,
+        fontWeight: FontWeight.w800,
         height: 1.0,
-        color: ShiguangColors.inkBrown.withValues(alpha: alpha),
+        color: base.withValues(alpha: alpha),
+        shadows: [
+          Shadow(
+            // 白字压深棕影、棕字压淡棕影：都补一圈「描边」，字不糊在底色上。
+            color: CandyColors.outline.withValues(
+              alpha: onColor ? 0.45 : 0.25,
+            ),
+            offset: const Offset(0, 1.2),
+            blurRadius: 0,
+          ),
+        ],
+        ),
       ),
     );
   }
 
-  /// 已总结：右上角金色勾。
-  Widget _checkBadge(double r) {
+  /// 已总结：右上角金色星星徽章（通关令牌）。
+  Widget _starBadge(double r) {
     final size = (r * 0.62).clamp(13.0, 30.0).toDouble();
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: ShiguangColors.completedGold,
-        border: Border.all(
-          color: ShiguangColors.paper.withValues(alpha: 0.95),
-          width: 1.6,
-        ),
+        color: CandyColors.glossWhite,
+        border: Border.all(color: CandyColors.outline, width: 2.2),
+        boxShadow: [
+          BoxShadow(
+            color: CandyColors.outline.withValues(alpha: 0.9),
+            blurRadius: 0,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Icon(
-        Icons.check_rounded,
-        size: size * 0.68,
-        color: ShiguangColors.paper,
+        Icons.star_rounded,
+        size: size * 0.72,
+        color: CandyColors.gold,
       ),
     );
   }
 
-  /// 未来：右上角小锁。
+  /// 未来：右上角小锁泡泡。
   Widget _lockBadge(double r) {
     final size = (r * 0.58).clamp(12.0, 28.0).toDouble();
     return Container(
@@ -412,17 +456,53 @@ class _DayNodeState extends State<DayNode> with SingleTickerProviderStateMixin {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: ShiguangColors.futureMist,
-        border: Border.all(
-          color: ShiguangColors.paper.withValues(alpha: 0.9),
-          width: 1.4,
-        ),
+        color: CandyColors.glossWhite,
+        border: Border.all(color: CandyColors.outline, width: 2.2),
+        boxShadow: [
+          BoxShadow(
+            color: CandyColors.outline.withValues(alpha: 0.9),
+            blurRadius: 0,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Icon(
         Icons.lock_rounded,
-        size: size * 0.62,
-        color: ShiguangColors.inkBrown,
+        size: size * 0.64,
+        color: CandyColors.outline,
       ),
     );
   }
+}
+
+// ============================================================================
+// 顶部高光弧
+// ============================================================================
+
+/// 沿圆顶部画一段半透明白色圆头弧——软糖/玻璃珠的「高光」。
+/// 只画这一层不重绘节点内容（CustomPaint 是叶子，换肤无关时可缓存）。
+class _TopGlossPainter extends CustomPainter {
+  /// 圆半径（决定弧的半径与笔宽）。
+  final double radius;
+
+  _TopGlossPainter(this.radius);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final stroke = (radius * 0.14).clamp(2.0, 6.0);
+    // 弧整体内缩：留出厚描边与高光自己的笔宽，压在果冻填充区上沿。
+    final rect = (Offset.zero & size).deflate(stroke + radius * 0.10);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round // 圆头线帽 = 糖果感的关键细节
+      ..color = CandyColors.glossWhite.withValues(alpha: 0.55);
+    // 画布角度：0 = 右、顺时针增大（y 向下），1.5π = 正上方。
+    // 起点 1.15π、扫过 0.7π → 弧横跨顶部约 126°。
+    canvas.drawArc(rect, math.pi * 1.15, math.pi * 0.7, false, paint);
+  }
+
+  @override
+  bool shouldRepaint(_TopGlossPainter old) => old.radius != radius;
 }

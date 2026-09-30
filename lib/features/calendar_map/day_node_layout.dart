@@ -36,7 +36,9 @@ const double kMapJitterXRatio = 0.11;
 const double kMapJitterYRatio = 0.30;
 
 /// 节点直径 = 0.72 × min(列宽, 行高)：留出抖动与对推所需的空隙。
-const double kMapNodeToCellRatio = 0.72;
+/// 直径占一格的比例：0.72 时节点过大把地图挤成一坨球（用户反馈），
+/// 降到 0.55 让路径露出来、地图有呼吸感，间距反而更容易满足。
+const double kMapNodeToCellRatio = 0.55;
 
 /// 最小间距轮数（交付约定 3 轮）。
 const int kMapRelaxRounds = 3;
