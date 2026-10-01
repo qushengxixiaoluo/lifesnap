@@ -47,5 +47,7 @@
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>拾光手册需要访问您的照片，以便按天扫描、整理并生成每日回顾。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>拾光手册需要把导出的分享卡片保存到您的相册。</string>
 </dict>
 </plist>

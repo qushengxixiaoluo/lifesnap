@@ -12,6 +12,10 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- 分享卡片「保存到相册」：Android 9 及以下写 MediaStore 需要存储权限；
+         Android 10+ 插入自己的媒体不需要任何权限 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <application
         android:label="拾光手册"
         android:name="${applicationName}"

@@ -11,6 +11,7 @@
 /// putNote/deleteNote；删照片连带删总结的逻辑不碰手记（无照片日手记是唯一记录）。
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -23,9 +24,11 @@ import '../../core/storage/photo_index_store.dart';
 import '../../core/thumbnails/thumb_image.dart';
 import '../../widgets/hand_card.dart';
 import '../settings/settings_page.dart';
+import '../settings/settings_utils.dart';
 import 'edit_note_dialog.dart';
 import 'edit_summary_dialog.dart';
 import 'photo_viewer.dart';
+import 'share_actions.dart';
 import 'share_card.dart';
 
 /// 展开某一天详情的底部面板（由 day_detail_launcher 嵌进 DraggableScrollableSheet）。
@@ -90,6 +93,7 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
 
   Future<_DayData>? _dataFuture;
   bool _generating = false;
+  bool _exporting = false; // 渲染卡片中：防双击
   String? _notice; // 行内提示（放行内而不是 SnackBar：SnackBar 会被面板盖住）
   // true = 失败（红）；导出成功这类信息走 false（绿），别把喜报画成报错
   bool _noticeIsError = true;
@@ -233,23 +237,113 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
     if (mounted) _reloadRecord();
   }
 
-  /// 导出分享卡片：离屏渲染 750×1000 PNG 并写本地。
-  /// 结果走 _notice 行内提示（SnackBar 会被本面板盖住，见字段注释）。
+  /// 导出分享卡片：离屏渲染 PNG → 弹「去向」面板，用户选保存到相册 /
+  /// 分享（系统面板，微信等都在里面）/ 保存为文件——图片不逼用户去
+  /// 文件夹里翻。结果走 _notice 行内提示（SnackBar 会被本面板盖住）。
   Future<void> _exportShareCard(DayRecord record) async {
+    if (_exporting) return;
+    setState(() {
+      _exporting = true;
+      _noticeIsError = false;
+      _notice = '正在生成卡片…';
+    });
     try {
-      final path = await exportDayShareCard(context, record);
+      final bytes = await renderShareCardPng(context, record);
       if (!mounted) return;
-      setState(() {
-        _noticeIsError = path == null;
-        _notice = path == null ? '导出失败：当天没有总结' : '已导出：$path';
-      });
+      setState(() => _exporting = false);
+      if (bytes == null) {
+        setState(() {
+          _noticeIsError = true;
+          _notice = '导出失败：当天没有总结';
+        });
+        return;
+      }
+      await _showExportActions(bytes, record.dayKey);
     } catch (e) {
       if (mounted) {
         setState(() {
+          _exporting = false;
           _noticeIsError = true;
           _notice = '导出失败：$e';
         });
       }
+    }
+  }
+
+  /// 卡片已渲染后的去向面板（平台裁剪动作项）。
+  Future<void> _showExportActions(Uint8List bytes, int dayKey) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.auto_awesome),
+              title: const Text('卡片已生成，选择去向'),
+            ),
+            if (isMobilePlatform)
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('保存到相册'),
+                onTap: () => _runExportAction(
+                  sheetCtx,
+                  () => saveShareCardToGallery(bytes, dayKey),
+                ),
+              ),
+            ListTile(
+              leading: const Icon(Icons.share_outlined),
+              title: const Text('分享…'),
+              subtitle: const Text('微信、QQ 等都在分享面板里'),
+              onTap: () => _runExportAction(sheetCtx, () async {
+                await shareShareCard(bytes, dayKey);
+                return '分享面板已关闭';
+              }),
+            ),
+            if (kIsWeb)
+              ListTile(
+                leading: const Icon(Icons.download_outlined),
+                title: const Text('下载图片'),
+                onTap: () => _runExportAction(
+                  sheetCtx,
+                  () => saveShareCardToGallery(bytes, dayKey),
+                ),
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.save_alt_outlined),
+                title: const Text('保存为文件'),
+                onTap: () => _runExportAction(
+                  sheetCtx,
+                  () => saveShareCardFile(bytes, dayKey),
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 执行一个去向动作：关面板 → 执行 → 结果写 _notice（成败两色）。
+  Future<void> _runExportAction(
+    BuildContext sheetCtx,
+    Future<String> Function() action,
+  ) async {
+    Navigator.of(sheetCtx).pop();
+    try {
+      final msg = await action();
+      if (!mounted) return;
+      setState(() {
+        _noticeIsError = false;
+        _notice = msg;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _noticeIsError = true;
+        _notice = '操作失败：$e';
+      });
     }
   }
 

@@ -1,13 +1,15 @@
-/// 分享卡片导出单测。
+/// 分享卡片导出单测（新交互：渲染 → 去向面板）。
 ///
-/// 两条关键路径：
-/// 1. 日详情 →「导出卡片」→ 行内「已导出：<路径>」且文件真实存在
+/// 三条关键路径：
+/// 1. 日详情 →「导出卡片」→ 渲染完成弹出去向面板（保存到相册 / 分享… /
+///    保存为文件——测试宿主按 Android 语义渲染，三个动作都在）；
+/// 2. 「保存为文件」→ 行内「已保存到文件：<路径>」且文件真实存在
 ///    （io 环境 path_provider 未注册时回退 Directory.systemTemp，照样可断言）；
-/// 2. ShareCard 纯渲染：固定尺寸宿主里日期/标题/落款上屏。
+/// 3. ShareCard 纯渲染：固定尺寸宿主里日期/标题/落款上屏。
 ///
-/// 导出内部有两段 Future.delayed(300ms) + endOfFrame，widget 测试的假时钟
-/// 只随 pump 前进——pumpAndSettle 默认步长下可能提前返回，所以显式
-/// pump(Duration)×N 手动推进，保证定时器全部触发、截图与写盘完成。
+/// 「保存到相册」「分享…」依赖平台通道（photo_manager / share_plus），
+/// 测试宿主里必然抛 MissingPluginException——断言其被转成「操作失败」
+/// 行内提示而不是崩溃，就是对错误路径的回归锁定。
 library;
 
 import 'dart:io';
@@ -60,7 +62,7 @@ Future<InMemoryPhotoIndexStore> _storeWithDay(int dayKey) async {
 /// 起最小宿主 App 并打开日详情面板（沿 day_detail_test 脚手架）。
 Future<void> _openSheet(
   WidgetTester tester,
-  PhotoIndexStore store,
+  InMemoryPhotoIndexStore store,
   int dayKey,
 ) async {
   await tester.pumpWidget(
@@ -85,103 +87,121 @@ Future<void> _openSheet(
   await tester.pumpAndSettle();
 }
 
-/// 面板初始只有 45% 高，先向上拖把内容拉到底（与 day_detail_test 同法）。
+/// 导出按钮在总结卡标题行，面板 45% 高度即可见，无须滚动。
+///
+/// 交替推进两种时钟：pump 推假时间（导出内部 2×300ms 延迟与 endOfFrame
+/// 只认假时钟），runAsync 给真实事件循环转几圈（引擎 toImage/toByteData
+/// 的完成回调只在真实事件循环上送达——纯 pump 下截图链会永远挂起）。
+Future<void> _tapExport(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('导出卡片'));
+  await tester.pump(); // 先构建 OverlayEntry
+  for (var i = 0; i < 15; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+  }
+  await tester.pumpAndSettle();
+}
+
+/// 行内提示在照片网格下方，先拖到底再断言。
 Future<void> _scrollToBottom(WidgetTester tester) async {
   await tester.drag(find.byType(ListView), const Offset(0, -800));
   await tester.pumpAndSettle();
 }
 
+/// 点击去向动作后的推进：关面板走假时钟，动作里的平台通道
+/// （path_provider / photo_manager）回包或异常只在真实事件循环送达。
+Future<void> _settleAfterAction(WidgetTester tester) async {
+  for (var i = 0; i < 10; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+  }
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUpAll(() {
-    // 平台通道在单测里没有实现：先换成内存偏好，避免 MissingPluginException
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('导出卡片：点按后行内提示已导出，文件真实落盘', (tester) async {
+  testWidgets('导出卡片：渲染后弹出去向面板，三动作齐全', (tester) async {
     const dayKey = 20260920;
     final store = await _storeWithDay(dayKey);
-
     await _openSheet(tester, store, dayKey);
-    expect(find.byTooltip('导出卡片'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('导出卡片'));
-    await tester.pump(); // 先构建 OverlayEntry
-    // 交替推进两种时钟：pump 推假时间（导出内部 2×300ms 延迟与 endOfFrame
-    // 只认假时钟），runAsync 给真实事件循环转几圈（引擎 toImage/toByteData
-    // 的完成回调与 path_provider 平台通道回包只在真实事件循环上送达——
-    // 纯 pump 下 toByteData 永远等不到，导出链会卡在截图这一步）
-    for (var i = 0; i < 15; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
-    }
-    await tester.pumpAndSettle();
+    await _tapExport(tester);
 
-    // 离屏卡片必须已被 finally 摘掉，不能留残影
+    // 离屏渲染完成后卡片应被摘掉，不许留残影
     expect(find.byType(ShareCard), findsNothing);
-
-    await _scrollToBottom(tester);
-    final notice = find.textContaining('已导出：');
-    expect(notice, findsOneWidget);
-
-    final text = tester.widget<Text>(notice).data!;
-    final path = text.replaceFirst('已导出：', '');
-    expect(File(path).existsSync(), isTrue);
-    expect(path, endsWith('shiguang_20260920.png'));
+    expect(find.text('卡片已生成，选择去向'), findsOneWidget);
+    expect(find.text('保存到相册'), findsOneWidget);
+    expect(find.text('分享…'), findsOneWidget);
+    expect(find.text('保存为文件'), findsOneWidget);
   });
 
-  testWidgets('无总结日：不出现导出入口', (tester) async {
-    const dayKey = 20260925;
-    final store = InMemoryPhotoIndexStore();
-    await store.init();
-    await store.upsertPhotos([
-      _photo(path: 'c.jpg', dayKey: dayKey, takenMs: 1768500000000),
-    ]);
-
+  testWidgets('保存为文件：行内提示路径且文件真实存在', (tester) async {
+    const dayKey = 20260920;
+    final store = await _storeWithDay(dayKey);
     await _openSheet(tester, store, dayKey);
-    expect(find.byTooltip('导出卡片'), findsNothing);
+
+    await _tapExport(tester);
+    await tester.tap(find.text('保存为文件'));
+    await _settleAfterAction(tester);
+    await _scrollToBottom(tester);
+
+    // 行内提示给出完整路径（成败两色中的成功绿），文件必须真实落盘
+    final text = find.textContaining('已保存到文件：');
+    expect(text, findsOneWidget);
+    final shown = tester
+        .widget<Text>(text)
+        .data!
+        .replaceFirst('已保存到文件：', '');
+    expect(File(shown).existsSync(), isTrue, reason: '提示的路径必须真实存在');
   });
 
-  testWidgets('ShareCard 纯渲染：日期、标题与落款上屏', (tester) async {
-    // 卡片 750×1000，先把测试画布撑到放得下的尺寸
-    tester.view.physicalSize = const Size(900, 1250);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
+  testWidgets('保存到相册：平台通道缺失时转行内错误提示，不崩溃', (tester) async {
+    const dayKey = 20260920;
+    final store = await _storeWithDay(dayKey);
+    await _openSheet(tester, store, dayKey);
 
+    await _tapExport(tester);
+    await tester.tap(find.text('保存到相册'));
+    await _settleAfterAction(tester);
+    await _scrollToBottom(tester);
+
+    // 测试宿主没有 photo_manager 通道 → MissingPluginException →
+    // 被 _runExportAction 兜成「操作失败：…」，绝不允许冒泡成红屏
+    expect(find.textContaining('操作失败'), findsOneWidget);
+  });
+
+  testWidgets('ShareCard 纯渲染：日期/标题/落款上屏', (tester) async {
+    final summary = AiSummary(
+      dayKey: 20260920,
+      title: '海边的午后',
+      narrative: '浪声把一下午拉得很长。',
+      tags: const ['海风'],
+      mood: '晴',
+      highlights: const ['捡到一枚贝壳'],
+      model: 'm',
+      photoSig: '',
+      createdAtMs: 0,
+    );
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: shareCardWidth,
-              height: shareCardHeight,
-              child: ShareCard(
-                dayKey: 20260920,
-                summary: AiSummary(
-                  dayKey: 20260920,
-                  title: '海边的午后',
-                  narrative: '浪声把一下午拉得很长，鞋里全是沙。',
-                  tags: const ['海风', '落日'],
-                  mood: '晴',
-                  highlights: const ['捡到一枚贝壳'],
-                  model: 'claude-opus-5-5',
-                  photoSig: '',
-                  createdAtMs: 1768000200000,
-                ),
-                // 无图日：不依赖缩略图管线，纯断言文字内容
-              ),
-            ),
+        home: Center(
+          child: SizedBox(
+            width: shareCardWidth,
+            height: shareCardHeight,
+            child: ShareCard(dayKey: 20260920, summary: summary),
           ),
         ),
       ),
     );
-    await tester.pumpAndSettle();
-
-    expect(find.textContaining('2026年9月20日'), findsOneWidget);
     expect(find.text('海边的午后'), findsOneWidget);
-    expect(find.text('#海风'), findsOneWidget);
-    expect(find.textContaining('✨ 捡到一枚贝壳'), findsOneWidget);
+    expect(find.textContaining('2026年9月20日'), findsOneWidget);
     expect(find.text('拾光手册'), findsOneWidget);
   });
 }

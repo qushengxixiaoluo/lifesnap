@@ -13,6 +13,7 @@
 /// OverlayEntry 保证在 finally 里摘除，不会在界面上留残影。
 library;
 
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -229,11 +230,11 @@ class ShareCard extends StatelessWidget {
   }
 }
 
-/// 离屏渲染 [record] 的分享卡并导出，返回落盘路径（web 为下载文件名）。
+/// 离屏渲染 [record] 的分享卡，返回 PNG 字节（1500×2000，pixelRatio 2）。
 ///
 /// 返回 null 仅当当天没有总结（调用方本不该在无总结时发起导出）。
-/// 其余失败一律抛错，由调用方转成「导出失败：…」行内提示。
-Future<String?> exportDayShareCard(
+/// 渲染/编码失败抛错，由调用方转成行内提示。
+Future<Uint8List?> renderShareCardPng(
   BuildContext context,
   DayRecord record,
 ) async {
@@ -284,11 +285,20 @@ Future<String?> exportDayShareCard(
     if (byteData == null) {
       throw StateError('卡片图像编码失败');
     }
-    return await exporter.saveShareCardPng(
-      byteData.buffer.asUint8List(),
-      record.dayKey,
-    );
+    return byteData.buffer.asUint8List();
   } finally {
     entry.remove(); // 无论成败都摘掉离屏层，避免残影与图层泄漏
   }
+}
+
+/// 离屏渲染并落盘为文件（「保存为文件」动作 / 桌面兜底），返回路径。
+///
+/// 返回 null 仅当当天没有总结；其余失败一律抛错。
+Future<String?> exportDayShareCard(
+  BuildContext context,
+  DayRecord record,
+) async {
+  final bytes = await renderShareCardPng(context, record);
+  if (bytes == null) return null;
+  return exporter.saveShareCardPng(bytes, record.dayKey);
 }
