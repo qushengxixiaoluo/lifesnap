@@ -46,6 +46,30 @@ class OpenAIAdapter implements AiProvider {
   }
 
   @override
+  Future<MonthlyReview> generateMonthlyReview({
+    required int year,
+    required int month,
+    required List<AiSummary> days,
+  }) async {
+    final request = openaiMonthlyRequest(
+      config: config,
+      apiKey: apiKey,
+      year: year,
+      month: month,
+      days: days,
+    );
+    final resp = await _client.post(request);
+    final payload = extractAssistantContent(resp.body);
+    // inputSig / createdAtMs 由 MonthlyReviewRepository 落库时回填。
+    return parseMonthlySummary(
+      payload,
+      year,
+      month,
+      modelOf(config, fallback: 'gpt-4o'),
+    );
+  }
+
+  @override
   Future<String> testConnection() async {
     final resp = await _client.post(
       openaiTestRequest(config: config, apiKey: apiKey),
