@@ -152,6 +152,19 @@ class _MapHomeState extends ConsumerState<_MapHome> {
       appBar: AppBar(
         title: const Text('拾光手册'),
         actions: [
+          // 浏览与搜索：标签云 / 心情 / 全文检索（页面自己实现，这里只管入口）
+          IconButton(
+            icon: const Icon(Icons.explore_outlined),
+            tooltip: '浏览与搜索',
+            onPressed: () => Navigator.of(context).pushNamed(AppRoutes.browse),
+          ),
+          // 那年今日：往年今天的照片与总结
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: '那年今日',
+            onPressed: () =>
+                Navigator.of(context).pushNamed(AppRoutes.onThisDay),
+          ),
           // 唯一入口：设置页承载 照片源/AI配置/批量/换肤（AppearanceSection）。
           // 走命名路由而非直接 import SettingsPage——跨轨只经 router 收口，
           // 既避免地图页重复持有设置页依赖，也消掉跨轨直接 import 的耦合。
@@ -477,7 +490,9 @@ class _MapMonthViewState extends ConsumerState<_MapMonthView> {
             statusOfDay(
               dayKey: dayKey,
               todayKey: todayKey,
-              hasSummary: meta?.hasSummary ?? false,
+              // 手写补记与 AI 总结同为「有记录」：金勾状态不区分内容来源
+              hasSummary: (meta?.hasSummary ?? false) ||
+                  (meta?.hasNote ?? false),
               photoCount: meta?.photoCount ?? 0,
             ),
           );
@@ -521,7 +536,8 @@ class _MapMonthViewState extends ConsumerState<_MapMonthView> {
                     dayKey: dayKeys[i],
                     status: statuses[i],
                     thumbPath: metas[dayKeys[i]]?.thumbPath,
-                    hasSummary: metas[dayKeys[i]]?.hasSummary ?? false,
+                    hasSummary: (metas[dayKeys[i]]?.hasSummary ?? false) ||
+                        (metas[dayKeys[i]]?.hasNote ?? false),
                     // 按下反馈：命中层下发，节点只做「变矮」视觉。
                     pressed: _pressedIndex == i,
                   ),

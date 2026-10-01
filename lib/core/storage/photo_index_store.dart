@@ -45,6 +45,23 @@ abstract class PhotoIndexStore {
   /// 删除后 dayIndex.hasSummary 必须同步失效（各实现自行刷新）。
   Future<void> deleteSummary(int dayKey);
 
+  /// 全部 AI 总结（按 day_key 升序）。
+  /// 浏览页标签云 / 搜索 / 月报输入 / 那年今日共用的唯一全量读口——
+  /// 个人日记量级（数千行）全量返回可接受，调用方自行过滤排序。
+  Future<List<AiSummary>> allSummaries();
+
+  // —— 手写补记（与 AI 总结互不覆盖的独立记录）——
+  Future<ManualNote?> noteOf(int dayKey);
+  Future<void> putNote(ManualNote note);
+
+  /// 删除手记。删除后 dayIndex.hasNote 同步失效；绝不连带删 AI 总结。
+  Future<void> deleteNote(int dayKey);
+
+  // —— 月度回顾 ——
+  Future<MonthlyReview?> monthlyReviewOf(int year, int month);
+  Future<void> putMonthlyReview(MonthlyReview review);
+  Future<void> deleteMonthlyReview(int year, int month);
+
   Future<void> close();
 }
 
@@ -56,6 +73,8 @@ class InMemoryPhotoIndexStore implements PhotoIndexStore {
   final _photos = <Photo>[];
   final _sources = <PhotoSource>[];
   final _summaries = <int, AiSummary>{};
+  final _notes = <int, ManualNote>{};
+  final _monthlies = <int, MonthlyReview>{};
   final _dayIndex = <int, DayMeta>{};
   int _nextId = 1;
 
@@ -143,7 +162,15 @@ class InMemoryPhotoIndexStore implements PhotoIndexStore {
         dayKey: p.dayKey,
         photoCount: (cur?.photoCount ?? 0) + 1,
         thumbPath: cur?.thumbPath ?? p.path, // 首张即预览，缩略图异步生成
+        hasSummary: _summaries.containsKey(p.dayKey),
+        hasNote: _notes.containsKey(p.dayKey),
       );
+    }
+    // 手记日没有照片也要进索引：否则无照片的手写补记在地图上拿不到金勾。
+    // photoCount=0 的条目不影响「有照片记录 N 天」类计数（那些按 photoCount>0 过滤）。
+    for (final dayKey in _notes.keys) {
+      _dayIndex[dayKey] = (_dayIndex[dayKey] ?? DayMeta(dayKey: dayKey, photoCount: 0))
+          .copyWith(hasNote: true);
     }
   }
 
@@ -151,18 +178,49 @@ class InMemoryPhotoIndexStore implements PhotoIndexStore {
   Future<AiSummary?> summaryOf(int dayKey) async => _summaries[dayKey];
 
   @override
-  Future<void> putSummary(AiSummary summary) async =>
-      _summaries[summary.dayKey] = summary;
+  Future<void> putSummary(AiSummary summary) async {
+    _summaries[summary.dayKey] = summary;
+    await refreshDayIndex();
+  }
 
   @override
   Future<void> deleteSummary(int dayKey) async {
     _summaries.remove(dayKey);
-    // dayIndex 里的 hasSummary 同步置 false（set 后节点金勾立即消失）
-    final meta = _dayIndex[dayKey];
-    if (meta != null && meta.hasSummary) {
-      _dayIndex[dayKey] = meta.copyWith(hasSummary: false);
-    }
+    await refreshDayIndex();
   }
+
+  @override
+  Future<List<AiSummary>> allSummaries() async {
+    final keys = _summaries.keys.toList()..sort();
+    return [for (final k in keys) _summaries[k]!];
+  }
+
+  @override
+  Future<ManualNote?> noteOf(int dayKey) async => _notes[dayKey];
+
+  @override
+  Future<void> putNote(ManualNote note) async {
+    _notes[note.dayKey] = note;
+    await refreshDayIndex();
+  }
+
+  @override
+  Future<void> deleteNote(int dayKey) async {
+    _notes.remove(dayKey);
+    await refreshDayIndex();
+  }
+
+  @override
+  Future<MonthlyReview?> monthlyReviewOf(int year, int month) async =>
+      _monthlies[year * 100 + month];
+
+  @override
+  Future<void> putMonthlyReview(MonthlyReview review) async =>
+      _monthlies[review.key] = review;
+
+  @override
+  Future<void> deleteMonthlyReview(int year, int month) async =>
+      _monthlies.remove(year * 100 + month);
 
   @override
   Future<void> close() async {}

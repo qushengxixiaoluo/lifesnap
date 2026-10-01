@@ -31,12 +31,16 @@ class HivePhotoIndexStore implements PhotoIndexStore {
   static const _boxSummaries = 'summaries';
   static const _boxDays = 'days';
   static const _boxMeta = 'meta';
+  static const _boxNotes = 'notes';
+  static const _boxMonthlies = 'monthly_reviews';
 
   Box? _photos;
   Box? _sources;
   Box? _summaries;
   Box? _days;
   Box? _meta;
+  Box? _notes;
+  Box? _monthlies;
 
   /// 内存日索引：月视图每次打开都要用，绝不能每次读 box（几万照片会卡帧）。
   final _dayIndex = <int, DayMeta>{};
@@ -51,6 +55,8 @@ class HivePhotoIndexStore implements PhotoIndexStore {
       _boxSummaries,
       _boxDays,
       _boxMeta,
+      _boxNotes,
+      _boxMonthlies,
     ]) {
       if (Hive.isBoxOpen(name)) {
         await Hive.box(name).close();
@@ -62,6 +68,8 @@ class HivePhotoIndexStore implements PhotoIndexStore {
     _summaries = await Hive.openBox(_boxSummaries);
     _days = await Hive.openBox(_boxDays);
     _meta = await Hive.openBox(_boxMeta);
+    _notes = await Hive.openBox(_boxNotes);
+    _monthlies = await Hive.openBox(_boxMonthlies);
     await refreshDayIndex();
   }
 
@@ -70,6 +78,8 @@ class HivePhotoIndexStore implements PhotoIndexStore {
   Box get _summariesBox => _summaries!;
   Box get _daysBox => _days!;
   Box get _metaBox => _meta!;
+  Box get _notesBox => _notes!;
+  Box get _monthliesBox => _monthlies!;
 
   // —— 扫描源 ————————————————————————————————————————
 
@@ -173,8 +183,9 @@ class HivePhotoIndexStore implements PhotoIndexStore {
   @override
   Future<void> refreshDayIndex() async {
     _dayIndex.clear();
-    // 总结集合先取出来：hasSummary 是节点金勾的依据，必须每次重算
+    // 总结/手记集合先取出来：hasSummary/hasNote 是节点金勾的依据，必须每次重算
     final summaryKeys = _summariesBox.keys.toSet();
+    final noteKeys = _notesBox.keys.toSet();
 
     // thumbPath 用「当天 takenAt 最早的一张」：确定性输出，不受写入顺序影响，
     // 与 photosOfDay 的排序首项一致，节点预览和详情页首图对得上。
@@ -197,6 +208,15 @@ class HivePhotoIndexStore implements PhotoIndexStore {
       );
     }
 
+    // 手记日没有照片也要进索引：无照片的手写补记在地图上同样要有金勾。
+    // photoCount=0 不影响「有照片记录 N 天」类计数（按 photoCount>0 过滤）。
+    for (final key in noteKeys) {
+      final dayKey = int.parse('$key');
+      _dayIndex[dayKey] =
+          (_dayIndex[dayKey] ?? DayMeta(dayKey: dayKey, photoCount: 0))
+              .copyWith(hasNote: true);
+    }
+
     // 先占位再回填 thumbPath：上面循环里首张只是插入序，这里统一换成确定性首张
     final dayWrites = <String, Map>{};
     for (final entry in _dayIndex.entries) {
@@ -205,12 +225,14 @@ class HivePhotoIndexStore implements PhotoIndexStore {
       final meta = entry.value.copyWith(
         thumbPath: first?.path,
         hasSummary: hasSummary,
+        hasNote: noteKeys.contains('${entry.key}'),
       );
       _dayIndex[entry.key] = meta;
       dayWrites['${entry.key}'] = {
         'photo_count': meta.photoCount,
         'thumb_path': meta.thumbPath,
         'has_summary': meta.hasSummary,
+        'has_note': meta.hasNote,
       };
     }
     await _daysBox.clear();
@@ -239,12 +261,67 @@ class HivePhotoIndexStore implements PhotoIndexStore {
   }
 
   @override
+  Future<List<AiSummary>> allSummaries() async {
+    final keys = _summariesBox.keys.cast<String>().toList()
+      ..sort((a, b) => a.compareTo(b));
+    return [
+      for (final k in keys)
+        AiSummary.fromMap(_asMap(_summariesBox.get(k))),
+    ];
+  }
+
+  // —— 手写补记 ————————————————————————————————————
+
+  @override
+  Future<ManualNote?> noteOf(int dayKey) async {
+    final raw = _notesBox.get('$dayKey');
+    return raw == null ? null : ManualNote.fromMap(_asMap(raw));
+  }
+
+  @override
+  Future<void> putNote(ManualNote note) async {
+    await _notesBox.put('${note.dayKey}', note.toMap());
+    await refreshDayIndex(); // hasNote 立即翻转，节点金勾马上可见
+  }
+
+  @override
+  Future<void> deleteNote(int dayKey) async {
+    await _notesBox.delete('$dayKey');
+    await refreshDayIndex();
+  }
+
+  // —— 月度回顾 ————————————————————————————————————
+
+  @override
+  Future<MonthlyReview?> monthlyReviewOf(int year, int month) async {
+    final raw = _monthliesBox.get('${year * 100 + month}');
+    return raw == null ? null : MonthlyReview.fromMap(_asMap(raw));
+  }
+
+  @override
+  Future<void> putMonthlyReview(MonthlyReview review) async =>
+      _monthliesBox.put('${review.key}', review.toMap());
+
+  @override
+  Future<void> deleteMonthlyReview(int year, int month) async =>
+      _monthliesBox.delete('${year * 100 + month}');
+
+  @override
   Future<void> close() async {
     // 逐个关闭而不是 Hive.close()：后者是全局的，会误伤同进程里的其他实例
-    for (final box in [_photos, _sources, _summaries, _days, _meta]) {
+    for (final box in [
+      _photos,
+      _sources,
+      _summaries,
+      _days,
+      _meta,
+      _notes,
+      _monthlies,
+    ]) {
       if (box != null && box.isOpen) await box.close();
     }
     _photos = _sources = _summaries = _days = _meta = null;
+    _notes = _monthlies = null;
     _dayIndex.clear();
   }
 

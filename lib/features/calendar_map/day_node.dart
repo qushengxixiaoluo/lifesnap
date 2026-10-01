@@ -40,8 +40,8 @@ import 'day_node_layout.dart';
 // ============================================================================
 
 enum DayNodeStatus {
-  withSummary, // 已有 AI 总结
-  withPhotos, // 有照片、无总结
+  withSummary, // 已有记录（AI 总结或手写补记，金勾不区分来源）
+  withPhotos, // 有照片、无记录
   pastEmpty, // 过去的空白日
   today, // 今日
   future, // 未来（未解锁）
@@ -49,7 +49,7 @@ enum DayNodeStatus {
 
 /// 由日期 + 元数据推导节点状态（纯函数，单测直接覆盖）。
 ///
-/// 判定顺序有讲究：今日 > 未来 > 有总结 > 有照片 > 空白，
+/// 判定顺序有讲究：今日 > 未来 > 有记录 > 有照片 > 空白，
 /// 因为「今天」是最强的导航信息，即使它已经有总结也要显示脉冲与徽章。
 DayNodeStatus statusOfDay({
   required int dayKey,
@@ -68,7 +68,7 @@ DayNodeStatus statusOfDay({
 String statusLabelOf(DayNodeStatus status) {
   switch (status) {
     case DayNodeStatus.withSummary:
-      return '已总结';
+      return '有记录';
     case DayNodeStatus.withPhotos:
       return '有照片';
     case DayNodeStatus.pastEmpty:

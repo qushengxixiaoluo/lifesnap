@@ -3,9 +3,8 @@
 /// ② HivePhotoIndexStore（桌面真实现，跑在临时目录上）
 /// 两套实现语义必须一致，防止「测试用内存、线上用 hive」出现行为分叉。
 ///
-/// hasSummary 特例：阶段 0 的 InMemory.refreshDayIndex 不读 summaries
-/// （photo_index_store.dart 是只读契约，不能改），因此 InMemory 组对
-/// hasSummary 只断言默认 false，hive 组断言真实翻转——差异原因写进交付报告。
+/// hasSummary/hasNote 语义两套实现统一：InMemory.refreshDayIndex 已改为
+/// 同步读 summaries/notes（手写补记功能合入时解除「只读契约」限制）。
 library;
 
 import 'dart:io';
@@ -23,7 +22,6 @@ void main() {
         await store.init();
         return store;
       },
-      hasSummaryFilled: false,
     );
   });
 
@@ -46,14 +44,12 @@ void main() {
         await store.init();
         return store;
       },
-      hasSummaryFilled: true,
     );
   });
 }
 
 void _contractTests({
   required Future<PhotoIndexStore> Function() open,
-  required bool hasSummaryFilled,
 }) {
   test('源：增查、markSourceScanned', () async {
     final store = await open();
@@ -242,13 +238,143 @@ void _contractTests({
     expect(got.mood, '晴');
     expect(got.photoSig, 'sig-abc');
 
-    // putSummary 后日索引应立刻带金勾（hasSummary）
-    if (hasSummaryFilled) {
-      expect(store.dayIndex[20260901]!.hasSummary, isTrue);
-    } else {
-      // 阶段 0 InMemory 不读 summaries，且该文件为只读契约——锁定现状即可
-      expect(store.dayIndex[20260901]!.hasSummary, isFalse);
-    }
+    // putSummary 后日索引应立刻带金勾（hasSummary）——两套实现统一断言
+    expect(store.dayIndex[20260901]!.hasSummary, isTrue);
+
+    // deleteSummary 后金勾随之消失（与 put 对称）
+    await store.deleteSummary(20260901);
+    expect(store.dayIndex[20260901]!.hasSummary, isFalse);
+    expect(await store.summaryOf(20260901), isNull);
+    await store.close();
+  });
+
+  test('allSummaries：全量返回、day_key 升序', () async {
+    final store = await open();
+    AiSummary summary(int dayKey, String title) => AiSummary(
+          dayKey: dayKey,
+          title: title,
+          narrative: 'n',
+          tags: const [],
+          mood: '晴',
+          highlights: const [],
+          model: 'unit-test',
+          photoSig: '',
+          createdAtMs: 0,
+        );
+    // 乱序写入
+    await store.putSummary(summary(20260903, 'c'));
+    await store.putSummary(summary(20260901, 'a'));
+    await store.putSummary(summary(20260902, 'b'));
+
+    final all = await store.allSummaries();
+    expect(all.map((s) => s.title).toList(), ['a', 'b', 'c']);
+    await store.close();
+  });
+
+  test('手写补记：putNote/noteOf 往返、无照片日进索引、与总结互不覆盖', () async {
+    final store = await open();
+    expect(await store.noteOf(20260905), isNull);
+
+    const note = ManualNote(
+      dayKey: 20260905,
+      body: '没有拍照的一天，写了两行字。',
+      updatedAtMs: 1759200000000,
+    );
+    await store.putNote(note);
+
+    final got = await store.noteOf(20260905);
+    expect(got, isNotNull);
+    expect(got!.body, '没有拍照的一天，写了两行字。');
+    expect(got.updatedAtMs, 1759200000000);
+
+    // 无照片的手记日也必须进日索引（地图金勾依据），photoCount=0
+    final meta = store.dayIndex[20260905];
+    expect(meta, isNotNull, reason: '手记日即使没有照片也要进索引');
+    expect(meta!.photoCount, 0);
+    expect(meta.hasNote, isTrue);
+
+    // 给这一天补一张照片：日索引条目转为常规照片日（后续删除手记也不会让它消失）
+    final sid = await store.addSource(
+      const PhotoSource(type: SourceType.folder, path: '/photos'),
+    );
+    await store.upsertPhotos([
+      Photo(
+        path: '/photos/n.jpg',
+        fileSize: 1,
+        mtimeMs: 1,
+        takenAtMs: 1,
+        dayKey: 20260905,
+        sourceId: sid,
+      ),
+    ]);
+
+    // 同一天再放一条总结：两种记录并存，删除手记不碰总结
+    await store.putSummary(AiSummary(
+      dayKey: 20260905,
+      title: 't',
+      narrative: 'n',
+      tags: const [],
+      mood: '晴',
+      highlights: const [],
+      model: 'm',
+      photoSig: '',
+      createdAtMs: 0,
+    ));
+    await store.deleteNote(20260905);
+    expect(await store.noteOf(20260905), isNull);
+    expect(await store.summaryOf(20260905), isNotNull,
+        reason: '删手记绝不连带删 AI 总结');
+    expect(store.dayIndex[20260905]!.hasNote, isFalse);
+    expect(store.dayIndex[20260905]!.hasSummary, isTrue);
+    await store.close();
+  });
+
+  test('月度回顾：put/monthlyReviewOf 往返、覆盖写、删除', () async {
+    final store = await open();
+    expect(await store.monthlyReviewOf(2026, 9), isNull);
+
+    const review = MonthlyReview(
+      year: 2026,
+      month: 9,
+      title: '九月的风',
+      narrative: '这个月……',
+      tags: ['秋'],
+      highlights: ['开学'],
+      model: 'unit-test',
+      inputSig: 'sig-1',
+      createdAtMs: 1759200000000,
+    );
+    await store.putMonthlyReview(review);
+    final got = await store.monthlyReviewOf(2026, 9);
+    expect(got, isNotNull);
+    expect(got!.title, '九月的风');
+    expect(got.tags, ['秋']);
+    expect(got.inputSig, 'sig-1');
+
+    // 覆盖写（重新生成月报）：不报错，以新内容为准
+    await store.putMonthlyReview(
+      const MonthlyReview(
+        year: 2026,
+        month: 9,
+        title: '九月的风（改）',
+        narrative: '改过的月报',
+        tags: [],
+        highlights: [],
+        model: 'unit-test',
+        inputSig: 'sig-2',
+        createdAtMs: 1759200100000,
+      ),
+    );
+    final updated = await store.monthlyReviewOf(2026, 9);
+    expect(updated!.title, '九月的风（改）');
+    expect(updated.inputSig, 'sig-2');
+
+    await store.deleteMonthlyReview(2026, 9);
+    expect(await store.monthlyReviewOf(2026, 9), isNull);
+    // 别的月份不受影响
+    await store.putMonthlyReview(review);
+    await store.deleteMonthlyReview(2026, 8);
+    expect(await store.monthlyReviewOf(2026, 9), isNotNull);
     await store.close();
   });
 

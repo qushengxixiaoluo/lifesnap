@@ -26,8 +26,12 @@ class SqflitePhotoIndexStore implements PhotoIndexStore {
     final dbPath = await getDatabasesPath();
     final db = await openDatabase(
       '$dbPath/shiguang_index.db',
-      version: 1,
+      version: 2,
       onCreate: (db, _) => _createSchema(db),
+      // v1 → v2：手写补记 + 月度回顾两张新表。老库只补建表，不动已有数据。
+      onUpgrade: (db, oldVersion, _) async {
+        if (oldVersion < 2) await _createV2Tables(db);
+      },
     );
     _db = db;
     await refreshDayIndex();
@@ -81,6 +85,32 @@ class SqflitePhotoIndexStore implements PhotoIndexStore {
         model TEXT NOT NULL,
         photo_sig TEXT NOT NULL,
         created_at INTEGER NOT NULL
+      )
+    ''');
+    await _createV2Tables(db);
+  }
+
+  /// v2 新增表（新建库直调，v1 老库走 onUpgrade 补建）。
+  Future<void> _createV2Tables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS manual_notes(
+        day_key INTEGER PRIMARY KEY,
+        body TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS monthly_reviews(
+        year INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        narrative TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        highlights_json TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_sig TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(year, month)
       )
     ''');
   }
@@ -198,6 +228,10 @@ class SqflitePhotoIndexStore implements PhotoIndexStore {
     final summaryKeys = {
       for (final r in summaryRows) (r['day_key'] as num).toInt(),
     };
+    final noteRows = await db.rawQuery('SELECT day_key FROM manual_notes');
+    final noteKeys = {
+      for (final r in noteRows) (r['day_key'] as num).toInt(),
+    };
 
     _dayIndex.clear();
     for (final r in rows) {
@@ -209,10 +243,18 @@ class SqflitePhotoIndexStore implements PhotoIndexStore {
           photoCount: 1,
           thumbPath: r['path'] as String,
           hasSummary: summaryKeys.contains(dayKey),
+          hasNote: noteKeys.contains(dayKey),
         );
       } else {
         _dayIndex[dayKey] = cur.copyWith(photoCount: cur.photoCount + 1);
       }
+    }
+    // 手记日没有照片也要进索引：无照片的手写补记在地图上同样要有金勾。
+    // photoCount=0 不影响「有照片记录 N 天」类计数（按 photoCount>0 过滤）。
+    for (final dayKey in noteKeys) {
+      _dayIndex[dayKey] =
+          (_dayIndex[dayKey] ?? DayMeta(dayKey: dayKey, photoCount: 0))
+              .copyWith(hasNote: true);
     }
   }
 
@@ -255,6 +297,82 @@ class SqflitePhotoIndexStore implements PhotoIndexStore {
       whereArgs: [dayKey],
     );
     await refreshDayIndex(); // hasSummary 随之置 false（与 put 对称）
+  }
+
+  @override
+  Future<List<AiSummary>> allSummaries() async {
+    final rows = await _database.query('summaries', orderBy: 'day_key ASC');
+    return rows.map(AiSummary.fromMap).toList();
+  }
+
+  // —— 手写补记 ————————————————————————————————————
+
+  @override
+  Future<ManualNote?> noteOf(int dayKey) async {
+    final rows = await _database.query(
+      'manual_notes',
+      where: 'day_key = ?',
+      whereArgs: [dayKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return ManualNote.fromMap(rows.first);
+  }
+
+  @override
+  Future<void> putNote(ManualNote note) async {
+    await _database.insert(
+      'manual_notes',
+      note.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await refreshDayIndex(); // hasNote 立即翻转，节点金勾马上可见
+  }
+
+  @override
+  Future<void> deleteNote(int dayKey) async {
+    await _database.delete(
+      'manual_notes',
+      where: 'day_key = ?',
+      whereArgs: [dayKey],
+    );
+    await refreshDayIndex();
+  }
+
+  // —— 月度回顾 ————————————————————————————————————
+
+  @override
+  Future<MonthlyReview?> monthlyReviewOf(int year, int month) async {
+    final rows = await _database.query(
+      'monthly_reviews',
+      where: 'year = ? AND month = ?',
+      whereArgs: [year, month],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return MonthlyReview.fromMap(rows.first);
+  }
+
+  @override
+  Future<void> putMonthlyReview(MonthlyReview review) async {
+    await _database.insert(
+      'monthly_reviews',
+      {
+        ...review.toMap(),
+        'tags_json': jsonEncode(review.tags),
+        'highlights_json': jsonEncode(review.highlights),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<void> deleteMonthlyReview(int year, int month) async {
+    await _database.delete(
+      'monthly_reviews',
+      where: 'year = ? AND month = ?',
+      whereArgs: [year, month],
+    );
   }
 
   @override

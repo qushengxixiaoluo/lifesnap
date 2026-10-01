@@ -129,19 +129,28 @@ class DayMeta {
   final int photoCount;
   final String? thumbPath; // 当日首张 256px 缩略图，节点预览用
   final bool hasSummary; // 该日已有 AI 总结（节点金勾依据；实现方在 refreshDayIndex 填充）
+  final bool hasNote; // 该日已有手写补记（无照片的手记日也会进索引）
 
   const DayMeta({
     required this.dayKey,
     required this.photoCount,
     this.thumbPath,
     this.hasSummary = false,
+    this.hasNote = false,
   });
 
-  DayMeta copyWith({int? photoCount, String? thumbPath, bool? hasSummary}) => DayMeta(
+  DayMeta copyWith({
+    int? photoCount,
+    String? thumbPath,
+    bool? hasSummary,
+    bool? hasNote,
+  }) =>
+      DayMeta(
         dayKey: dayKey,
         photoCount: photoCount ?? this.photoCount,
         thumbPath: thumbPath ?? this.thumbPath,
         hasSummary: hasSummary ?? this.hasSummary,
+        hasNote: hasNote ?? this.hasNote,
       );
 }
 
@@ -253,6 +262,131 @@ List<String>? _jsonDecodeList(String raw) {
     if (decoded is List) return decoded.cast<String>();
   } catch (_) {/* 由调用方回退到逗号分割 */}
   return null;
+}
+
+// ============================================================================
+// ManualNote：无照片日的手写补记（纯人写，与 AI 总结互不覆盖）
+// ============================================================================
+
+/// 一天的手写补记。与 [AiSummary] 是两条独立记录：
+/// 重新生成 AI 总结不会动它，删除总结也不会删它（反之亦然）。
+class ManualNote {
+  final int dayKey;
+  final String body; // 正文（纯文本，允许几百字）
+  final int updatedAtMs;
+
+  const ManualNote({
+    required this.dayKey,
+    required this.body,
+    required this.updatedAtMs,
+  });
+
+  Map<String, Object?> toMap() => {
+        'day_key': dayKey,
+        'body': body,
+        'updated_at': updatedAtMs,
+      };
+
+  factory ManualNote.fromMap(Map<String, Object?> m) => ManualNote(
+        dayKey: (m['day_key'] as num).toInt(),
+        body: m['body'] as String? ?? '',
+        updatedAtMs: (m['updated_at'] as num?)?.toInt() ?? 0,
+      );
+}
+
+// ============================================================================
+// MonthlyReview：月度 AI 回顾（把当月的日总结再浓缩成一篇月报）
+// ============================================================================
+
+/// 一个月的 AI 回顾。inputSig 是成员日总结内容的指纹：
+/// 任何一条日总结被编辑/重生成/删除，或月内新增总结，指纹都会变 → 月报标失效。
+class MonthlyReview {
+  final int year;
+  final int month;
+  final String title; // 月报标题，如「九月的风」
+  final String narrative; // 300-600 字月度散文
+  final List<String> tags; // 当月主题标签
+  final List<String> highlights; // 当月亮点（≤5）
+  final String model; // 生成模型
+  final String inputSig; // 成员日总结内容指纹（computeMonthlyInputSig）
+  final int createdAtMs;
+
+  const MonthlyReview({
+    required this.year,
+    required this.month,
+    required this.title,
+    required this.narrative,
+    required this.tags,
+    required this.highlights,
+    required this.model,
+    required this.inputSig,
+    required this.createdAtMs,
+  });
+
+  /// 存储主键 yyyyMM（与 sqflite 复合主键 / hive 字符串键对齐）。
+  int get key => year * 100 + month;
+
+  Map<String, Object?> toMap() => {
+        'year': year,
+        'month': month,
+        'title': title,
+        'narrative': narrative,
+        'tags_json': tags,
+        'highlights_json': highlights,
+        'model': model,
+        'input_sig': inputSig,
+        'created_at': createdAtMs,
+      };
+
+  factory MonthlyReview.fromMap(Map<String, Object?> m) {
+    List<String> strList(Object? v) {
+      if (v is List) return v.cast<String>();
+      if (v is String && v.isNotEmpty) {
+        final trimmed = v.trim();
+        if (trimmed.startsWith('[')) {
+          try {
+            final decoded = _jsonDecodeList(trimmed);
+            if (decoded != null) return decoded;
+          } catch (_) {/* 落到逗号分割 */}
+        }
+        return trimmed.split(',').map((e) => e.trim()).toList();
+      }
+      return const [];
+    }
+
+    return MonthlyReview(
+      year: (m['year'] as num).toInt(),
+      month: (m['month'] as num).toInt(),
+      title: m['title'] as String? ?? '',
+      narrative: m['narrative'] as String? ?? '',
+      tags: strList(m['tags_json'] ?? m['tags']),
+      highlights: strList(m['highlights_json'] ?? m['highlights']),
+      model: m['model'] as String? ?? '',
+      inputSig: m['input_sig'] as String? ?? '',
+      createdAtMs: (m['created_at'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+/// 月报输入指纹：当月日总结的「成员 + 内容」哈希。
+///
+/// 与 [computePhotoSig] 同一套失效哲学——内容驱动，不记时间戳：
+/// 改一条日总结、补一条、删一条，都会让已生成的月报标为过期。
+/// 只看用户可见内容（day_key/title/narrative/tags/mood/highlights），
+/// 不含 model/photo_sig（换模型重生成同内容不算变化）。
+String computeMonthlyInputSig(List<AiSummary> monthSummaries) {
+  final canonical = monthSummaries.map((s) {
+    return [
+      s.dayKey,
+      s.title,
+      s.narrative,
+      s.tags.join('、'),
+      s.mood,
+      s.highlights.join('、'),
+    ].join('|');
+  }).toList()
+    ..sort();
+  return sha1.convert(utf8.encode(canonical.join('\n'))).toString();
 }
 
 // ============================================================================
