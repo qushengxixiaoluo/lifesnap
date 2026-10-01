@@ -26,6 +26,7 @@ import '../settings/settings_page.dart';
 import 'edit_note_dialog.dart';
 import 'edit_summary_dialog.dart';
 import 'photo_viewer.dart';
+import 'share_card.dart';
 
 /// 展开某一天详情的底部面板（由 day_detail_launcher 嵌进 DraggableScrollableSheet）。
 class DayDetailSheet extends ConsumerStatefulWidget {
@@ -225,6 +226,20 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
     if (ok != true || _store == null || !mounted) return;
     await _store!.deleteNote(widget.dayKey);
     if (mounted) _reloadRecord();
+  }
+
+  /// 导出分享卡片：离屏渲染 750×1000 PNG 并写本地。
+  /// 结果走 _notice 行内提示（SnackBar 会被本面板盖住，见字段注释）。
+  Future<void> _exportShareCard(DayRecord record) async {
+    try {
+      final path = await exportDayShareCard(context, record);
+      if (!mounted) return;
+      setState(() {
+        _notice = path == null ? '导出失败：当天没有总结' : '已导出：$path';
+      });
+    } catch (e) {
+      if (mounted) setState(() => _notice = '导出失败：$e');
+    }
   }
 
   Future<void> _showKeyGuide() async {
@@ -612,6 +627,15 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
                   tooltip: '编辑总结',
                   onPressed: () => _editSummary(summary),
                   icon: const Icon(Icons.edit_outlined, size: 18),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+                // 总结卡 → 竖版分享图（750×1000 PNG 落盘，见 share_card.dart）
+                IconButton(
+                  tooltip: '导出卡片',
+                  onPressed: () => _exportShareCard(record),
+                  icon: const Icon(Icons.ios_share_outlined, size: 18),
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
