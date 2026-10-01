@@ -23,6 +23,15 @@ abstract class AiProvider {
     required String dayContext,
   });
 
+  /// 月度回顾：把整月日总结浓缩成一篇中文月报（纯文本，不带图片）。
+  /// [days] 为该月日总结，day_key 升序；由 MonthlyReviewRepository 负责
+  /// 过滤当月、算 inputSig 与落库，适配器只管请求与解析。
+  Future<MonthlyReview> generateMonthlyReview({
+    required int year,
+    required int month,
+    required List<AiSummary> days,
+  });
+
   /// 设置页「测试连接」：发最小请求，成功返回模型回执（如模型名），失败抛异常。
   Future<String> testConnection();
 }

@@ -129,6 +129,266 @@ const String openaiSystemPrompt =
     '只输出一个 JSON 对象，包含 title、narrative、tags、mood、highlights 五个字段，'
     '不要输出 Markdown 代码围栏，不要输出任何解释。';
 
+// ---------------------------------------------------------------------------
+// 月度回顾：提示词 + 双格式请求 + 宽容解析
+// ---------------------------------------------------------------------------
+
+/// 月报 JSON Schema（Anthropic structured output 用；与提示词描述保持同一份）。
+const Map<String, Object?> monthlyReviewJsonSchema = <String, Object?>{
+  'type': 'object',
+  'additionalProperties': false,
+  'required': <String>['title', 'narrative', 'tags', 'highlights'],
+  'properties': <String, Object?>{
+    'title': <String, Object?>{
+      'type': 'string',
+      'description': '月报标题，不超过 12 个字，如「九月的风」',
+      'maxLength': 12,
+    },
+    'narrative': <String, Object?>{
+      'type': 'string',
+      'description': '300-600 字的中文月度散文',
+    },
+    'tags': <String, Object?>{
+      'type': 'array',
+      'maxItems': 6,
+      'items': <String, Object?>{
+        'type': 'string',
+        'description': '2-4 字的当月主题标签',
+      },
+    },
+    'highlights': <String, Object?>{
+      'type': 'array',
+      'maxItems': 5,
+      'items': <String, Object?>{
+        'type': 'string',
+        'description': '不超过 14 字的当月亮点',
+      },
+    },
+  },
+};
+
+/// 月报的 system 说明（两家适配器共用同一段文字，风格与日总结提示词对齐）。
+const String monthlySystemPrompt =
+    '你是「拾光手册」的月度回顾作者，把一个月的日总结浓缩成一篇中文月度散文。'
+    '不要逐日复述，要提炼当月的主线、情绪起伏与反复出现的主题。'
+    '只输出一个 JSON 对象，包含 title、narrative、tags、highlights 四个字段，'
+    '不要输出 Markdown 代码围栏，不要输出任何解释。';
+
+/// 月报 user 文本：逐日列出（日期、标题、正文、标签、心情、瞬间）。
+///
+/// 为什么由构造器统一生成：两家请求体里这段文字必须一致，
+/// 同一批日总结在两个平台上才会有风格相同的月报。
+String buildMonthlyPrompt({
+  required int year,
+  required int month,
+  required List<AiSummary> days,
+}) {
+  const weekdays = <String>['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  final buf = StringBuffer()
+    ..writeln('请为下面这个月生成一份「拾光手册」的月度回顾。')
+    ..writeln()
+    ..writeln('$year 年 $month 月，共 ${days.length} 天日总结：');
+  for (final d in days) {
+    final date = dayKeyToDateTime(d.dayKey);
+    final weekday = weekdays[date.weekday - 1];
+    buf
+      ..writeln()
+      ..writeln('【${date.month}月${date.day}日 $weekday】${d.title}')
+      ..writeln(d.narrative);
+    if (d.tags.isNotEmpty) buf.writeln('标签：${d.tags.join('、')}');
+    buf.writeln('心情：${d.mood}');
+    if (d.highlights.isNotEmpty) {
+      buf.writeln('瞬间：${d.highlights.join('、')}');
+    }
+  }
+  buf
+    ..writeln()
+    ..writeln('要求：')
+    ..writeln('1. 通读全部日总结，提炼整月的主线与情绪走向，不要逐日流水账；')
+    ..writeln('2. narrative 写成 300-600 字的中文散文，克制、具体、有画面感；')
+    ..writeln('3. title 不超过 12 个字（如「九月的风」）；')
+    ..writeln('4. tags 不超过 6 个当月主题标签（每个 2-4 字）；')
+    ..writeln('5. highlights 不超过 5 条当月亮点（每条不超过 14 字）。')
+    ..writeln()
+    ..writeln('只输出一个 JSON 对象，不要解释、不要 Markdown 代码围栏。');
+  return buf.toString();
+}
+
+/// Anthropic 月报请求体（纯文本：system + 单条 user 文本，不带图片）。
+AiHttpRequest anthropicMonthlyRequest({
+  required AiConfig config,
+  required String apiKey,
+  required int year,
+  required int month,
+  required List<AiSummary> days,
+  bool withFallbackBeta = true,
+}) =>
+    AiHttpRequest(
+      url: buildEndpoint(config.baseUrl, '/v1/messages', fallbackOrigin: anthropicOrigin),
+      headers: <String, String>{
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        if (withFallbackBeta) 'anthropic-beta': 'server-side-fallback-2026-07-01',
+      },
+      body: <String, Object?>{
+        'model': modelOf(config, fallback: 'claude-opus-5-5'),
+        'max_tokens': 4096,
+        'system': monthlySystemPrompt,
+        'output_config': <String, Object?>{
+          'effort': effortOf(config),
+          'format': <String, Object?>{
+            'type': 'json_schema',
+            'schema': monthlyReviewJsonSchema,
+          },
+        },
+        if (effortOf(config) == 'high')
+          'thinking': <String, Object?>{'type': 'adaptive'},
+        'messages': <Object?>[
+          <String, Object?>{
+            'role': 'user',
+            'content': <Map<String, Object?>>[
+              <String, Object?>{
+                'type': 'text',
+                'text': buildMonthlyPrompt(year: year, month: month, days: days),
+              },
+            ],
+          },
+        ],
+        if (withFallbackBeta) 'fallbacks': 'default',
+      },
+    );
+
+/// OpenAI 月报请求体（system + user 纯文本，response_format=json_object）。
+AiHttpRequest openaiMonthlyRequest({
+  required AiConfig config,
+  required String apiKey,
+  required int year,
+  required int month,
+  required List<AiSummary> days,
+}) {
+  _requireBaseUrl(config);
+  return AiHttpRequest(
+    url: buildEndpoint(config.baseUrl, '/v1/chat/completions', fallbackOrigin: ''),
+    headers: <String, String>{
+      'content-type': 'application/json',
+      'Authorization': 'Bearer $apiKey',
+    },
+    body: <String, Object?>{
+      'model': modelOf(config, fallback: 'gpt-4o'),
+      'max_tokens': 4096,
+      'response_format': <String, Object?>{'type': 'json_object'},
+      'messages': <Object?>[
+        <String, Object?>{'role': 'system', 'content': monthlySystemPrompt},
+        <String, Object?>{
+          'role': 'user',
+          'content': buildMonthlyPrompt(year: year, month: month, days: days),
+        },
+      ],
+    },
+  );
+}
+
+/// 把模型返回的任意形态文本解析成 [MonthlyReview]（宽容链与 [parseAiSummary] 同构）。
+///
+/// 依次尝试（全部失败才抛 [AiFormatException]）：
+/// 1. 直接是结构化对象（Map / 已经是合法 JSON 字符串）；
+/// 2. content 块数组或嵌套外壳 → 拼接成字符串后再走同一条链；
+/// 3. 剥掉 ```json ... ``` 代码围栏；
+/// 4. 截取首个 `{` 到末个 `}` 再 jsonDecode。
+///
+/// 解析成功后做宽容收敛：标题截到 12 字、tags 截到 6、highlights 截到 5。
+/// inputSig / createdAtMs 不在此处决定——它们属于「本次生成依据了哪些日总结」，
+/// 由 MonthlyReviewRepository 落库时统一回填。
+MonthlyReview parseMonthlySummary(
+  Object? text,
+  int year,
+  int month,
+  String model,
+) {
+  final review = _tryParseMonthly(text, year, month, model, allowNesting: true);
+  if (review != null) return review;
+  throw const AiFormatException();
+}
+
+MonthlyReview? _tryParseMonthly(
+  Object? raw,
+  int year,
+  int month,
+  String model, {
+  required bool allowNesting,
+}) {
+  if (raw is Map) {
+    final direct = _monthlyFromMap(raw, year, month, model);
+    if (direct != null) return direct;
+    if (allowNesting) {
+      // 结构化外壳：{content: ...} / {message: {content: ...}} / {review: {...}}
+      for (final key in const <String>['content', 'message', 'review', 'result']) {
+        if (!raw.containsKey(key)) continue;
+        final nested = _tryParseMonthly(
+          raw[key],
+          year,
+          month,
+          model,
+          allowNesting: false,
+        );
+        if (nested != null) return nested;
+      }
+    }
+    return null;
+  }
+  if (raw is List) {
+    final joined = _joinBlocks(raw);
+    if (joined.isEmpty) return null;
+    return _tryParseMonthly(joined, year, month, model, allowNesting: allowNesting);
+  }
+  if (raw is! String) return null;
+
+  for (final candidate in _candidates(raw)) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(candidate);
+    } catch (_) {
+      continue; // 这一级没解出来，继续尝试更宽松的下一级
+    }
+    if (decoded is Map) {
+      final s = _monthlyFromMap(decoded, year, month, model);
+      if (s != null) return s;
+      if (allowNesting) {
+        final nested = _tryParseMonthly(
+          decoded,
+          year,
+          month,
+          model,
+          allowNesting: false,
+        );
+        if (nested != null) return nested;
+      }
+    }
+  }
+  return null;
+}
+
+MonthlyReview? _monthlyFromMap(Map m, int year, int month, String model) {
+  final title = _text(m['title']);
+  final narrative = _text(m['narrative']);
+  if (title.isEmpty || narrative.isEmpty) return null; // 不像月报，换下一级候选
+
+  final tags = _stringList(m['tags']);
+  final highlights = _stringList(m['highlights']);
+  return MonthlyReview(
+    year: year,
+    month: month,
+    title: _clamp(title, 12),
+    narrative: narrative,
+    tags: tags.length > 6 ? tags.sublist(0, 6) : tags,
+    highlights: highlights.length > 5 ? highlights.sublist(0, 5) : highlights,
+    model: model,
+    inputSig: '',
+    createdAtMs: DateTime.now().millisecondsSinceEpoch,
+  );
+}
+
 /// Anthropic Messages 请求体（含 headers 与 url）。
 ///
 /// [withFallbackBeta] 默认带 `anthropic-beta: server-side-fallback-2026-07-01`

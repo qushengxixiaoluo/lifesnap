@@ -15,7 +15,10 @@ import '../../app/app_style.dart';
 import '../../app/batch_service.dart';
 import '../../app/providers.dart';
 import '../../core/ai/ai_provider.dart';
+import '../../core/ai/api_key_store.dart';
 import '../../core/models/models.dart';
+import '../monthly_review/monthly_review_card.dart';
+import '../monthly_review/monthly_review_providers.dart';
 import 'settings_utils.dart';
 
 class BatchSection extends ConsumerStatefulWidget {
@@ -36,12 +39,56 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
   final _retrying = <int>{};
   final _retryError = <int, String>{};
 
+  // 月度回顾的本地 UI 态（月报本体在 monthlyReviewViewProvider 里）
+  bool _reviewLoading = false;
+  String? _reviewError;
+
   @override
   void initState() {
     super.initState();
     final now = DateTime.now();
     _year = now.year;
     _month = now.month;
+  }
+
+  /// 生成（[force]=true 时强制重生成）所选月份的月度回顾。
+  ///
+  /// 一次性调用，不入批量队列；成功后 invalidate 视图 provider 刷新结果卡。
+  Future<void> _generateReview({bool force = false}) async {
+    if (_reviewLoading) return;
+    setState(() {
+      _reviewLoading = true;
+      _reviewError = null;
+    });
+    final key = _year * 100 + _month;
+    try {
+      // 无 key 给引导而不是让 AiAuthException 的「无效或已过期」误导用户
+      if (!await ApiKeyStore.exists()) {
+        if (!mounted) return;
+        setState(() {
+          _reviewLoading = false;
+          _reviewError = '请先到上方设置 API Key';
+        });
+        return;
+      }
+      final repo = await ref.read(monthlyReviewRepositoryProvider.future);
+      await repo.generate(year: _year, month: _month, force: force);
+      if (!mounted) return;
+      ref.invalidate(monthlyReviewViewProvider(key));
+      setState(() => _reviewLoading = false);
+    } on AiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _reviewLoading = false;
+        _reviewError = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _reviewLoading = false;
+        _reviewError = '生成失败：$e';
+      });
+    }
   }
 
   Future<void> _retryDay(int dayKey) async {
@@ -201,8 +248,111 @@ class _BatchSectionState extends ConsumerState<BatchSection> {
         ],
 
         ..._progressBlock(theme, job),
+
+        // —— 月度回顾：把所选月份的日总结浓缩成一篇 AI 月报 ——
+        // 月份沿用上方的 _year/_month 下拉（同一份状态，不另开选择器）。
+        const SizedBox(height: 20),
+        sectionTitle(context, Icons.auto_stories_outlined, '月度回顾',
+            subtitle: '把所选月份的日总结浓缩成一篇月报'),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: _reviewLoading ? null : () => _generateReview(),
+          icon: _reviewLoading
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.menu_book_outlined, size: 18),
+          label: Text(_reviewLoading ? '生成中…' : '生成本月回顾'),
+        ),
+        ..._reviewBlock(theme),
       ],
     );
+  }
+
+  /// 月度回顾的结果区：失效横幅 / 结果卡 / 空态提示 / 行内错误。
+  List<Widget> _reviewBlock(ThemeData theme) {
+    final out = <Widget>[];
+    if (_reviewError != null) {
+      out.addAll([
+        const SizedBox(height: 8),
+        Text(
+          _reviewError!,
+          style: const TextStyle(fontSize: 13, color: ShiguangColors.danger),
+        ),
+      ]);
+    }
+
+    final viewAsync = ref.watch(monthlyReviewViewProvider(_year * 100 + _month));
+    viewAsync.when(
+      loading: () {},
+      error: (e, _) {
+        out.addAll([
+          const SizedBox(height: 8),
+          Text(
+            '读取月报失败：$e',
+            style: const TextStyle(fontSize: 13, color: ShiguangColors.danger),
+          ),
+        ]);
+      },
+      data: (view) {
+        if (view.stale) {
+          // 失效横幅：点一下即 force 重新生成（样式沿日总结卡的失效横幅）
+          out.addAll([
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: _reviewLoading ? null : () => _generateReview(force: true),
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: ShiguangColors.danger.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: ShiguangColors.danger.withValues(alpha: 0.45),
+                  ),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.sync_problem,
+                        size: 16, color: ShiguangColors.danger),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '本月日总结有更新，点击重新生成',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: ShiguangColors.danger,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ]);
+        }
+        final review = view.review;
+        if (review != null) {
+          out.addAll([
+            const SizedBox(height: 10),
+            MonthlyReviewCard(review: review),
+          ]);
+        } else if (!view.hasDaySummaries) {
+          out.addAll([
+            const SizedBox(height: 8),
+            Text(
+              '本月还没有日总结，先补全再生成回顾',
+              style: theme.textTheme.bodySmall,
+            ),
+          ]);
+        }
+      },
+    );
+    return out;
   }
 
   List<Widget> _progressBlock(ThemeData theme, BatchJobState job) {

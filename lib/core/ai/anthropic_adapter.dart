@@ -43,6 +43,26 @@ class AnthropicAdapter implements AiProvider {
   }
 
   @override
+  Future<MonthlyReview> generateMonthlyReview({
+    required int year,
+    required int month,
+    required List<AiSummary> days,
+  }) async {
+    final payload = await _postMonthlyWithBetaFallback(
+      year: year,
+      month: month,
+      days: days,
+    );
+    // inputSig / createdAtMs 由 MonthlyReviewRepository 落库时回填。
+    return parseMonthlySummary(
+      payload,
+      year,
+      month,
+      modelOf(config, fallback: 'claude-opus-5-5'),
+    );
+  }
+
+  @override
   Future<String> testConnection() async {
     final resp = await _client.post(
       anthropicTestRequest(config: config, apiKey: apiKey),
@@ -62,29 +82,45 @@ class AnthropicAdapter implements AiProvider {
     required List<Uint8List> imagesJpeg,
     required DateTime date,
     required String dayContext,
-  }) async {
-    AiHttpRequest request = anthropicRequest(
-      config: config,
-      apiKey: apiKey,
-      imagesJpeg: imagesJpeg,
-      date: date,
-      dayContext: dayContext,
-      withFallbackBeta: true,
-    );
+  }) =>
+      _postWithFallback(
+        ({required bool withFallbackBeta}) => anthropicRequest(
+          config: config,
+          apiKey: apiKey,
+          imagesJpeg: imagesJpeg,
+          date: date,
+          dayContext: dayContext,
+          withFallbackBeta: withFallbackBeta,
+        ),
+      );
+
+  /// 发一次月报请求（与日总结共用 beta 头降级重试）。
+  Future<Object?> _postMonthlyWithBetaFallback({
+    required int year,
+    required int month,
+    required List<AiSummary> days,
+  }) =>
+      _postWithFallback(
+        ({required bool withFallbackBeta}) => anthropicMonthlyRequest(
+          config: config,
+          apiKey: apiKey,
+          year: year,
+          month: month,
+          days: days,
+          withFallbackBeta: withFallbackBeta,
+        ),
+      );
+
+  /// 通用发送：先带 beta 头发一次，被 400 点名就去掉重试一次。
+  Future<Object?> _postWithFallback(
+    AiHttpRequest Function({required bool withFallbackBeta}) build,
+  ) async {
     try {
-      final resp = await _client.post(request);
+      final resp = await _client.post(build(withFallbackBeta: true));
       return extractAssistantContent(resp.body);
     } on AiHttpException catch (e) {
       if (!_betaHeaderRejected(e)) rethrow;
-      request = anthropicRequest(
-        config: config,
-        apiKey: apiKey,
-        imagesJpeg: imagesJpeg,
-        date: date,
-        dayContext: dayContext,
-        withFallbackBeta: false,
-      );
-      final resp = await _client.post(request);
+      final resp = await _client.post(build(withFallbackBeta: false));
       return extractAssistantContent(resp.body);
     }
   }
