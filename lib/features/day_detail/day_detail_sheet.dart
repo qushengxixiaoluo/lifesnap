@@ -4,8 +4,11 @@
 /// [DayRecord]；并把 summary.photoSig 与 computePhotoSig(photos) 对比得到 stale
 /// ——照片被增删改后，AI 总结卡顶部会横幅提示「照片有更新，点击重新生成」。
 ///
-/// 结构（自上而下）：日期标题 → AI 总结卡 → 照片网格 → 生成按钮。
-/// 三类空态：未来日期 / 有照片无总结 / 无照片空日。
+/// 结构（自上而下）：日期标题 → AI 总结卡 → 手记卡 → 照片网格 → 生成按钮。
+/// 三类空态：未来日期 / 有照片无总结 / 无照片空日（可纯手写补记）。
+///
+/// 手写补记与 AI 总结并存互不覆盖：手记存 [ManualNote]，走 store.noteOf/
+/// putNote/deleteNote；删照片连带删总结的逻辑不碰手记（无照片日手记是唯一记录）。
 library;
 
 import 'package:flutter/material.dart';
@@ -20,6 +23,7 @@ import '../../core/storage/photo_index_store.dart';
 import '../../core/thumbnails/thumb_image.dart';
 import '../../widgets/hand_card.dart';
 import '../settings/settings_page.dart';
+import 'edit_note_dialog.dart';
 import 'edit_summary_dialog.dart';
 import 'photo_viewer.dart';
 
@@ -59,25 +63,45 @@ Future<DayRecord> loadDayRecord(PhotoIndexStore store, int dayKey) async {
   );
 }
 
+/// 面板一次装配的完整快照：日记录 + 手写补记。
+///
+/// 手记不进 [DayRecord]（models.dart 是只读契约，禁改），所以在面板内
+/// 并行加载后一起交给 FutureBuilder——总结卡与手记卡同帧刷新，不闪第二下。
+class _DayData {
+  const _DayData({required this.record, required this.note});
+
+  final DayRecord record;
+
+  /// 当日手记；null = 还没写过。
+  final ManualNote? note;
+}
+
+/// 组装 [_DayData]：照片/总结/失效标记 + 手记。
+Future<_DayData> _loadDayData(PhotoIndexStore store, int dayKey) async {
+  final record = await loadDayRecord(store, dayKey);
+  final note = await store.noteOf(dayKey);
+  return _DayData(record: record, note: note);
+}
+
 class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
   /// 缓存存储实例：生成成功后要拿同一实例重读，不能中途换容器。
   PhotoIndexStore? _store;
 
-  Future<DayRecord>? _recordFuture;
+  Future<_DayData>? _dataFuture;
   bool _generating = false;
   String? _notice; // 生成失败等行内提示（放行内而不是 SnackBar：SnackBar 会被面板盖住）
 
   void _bindStore(PhotoIndexStore store) {
     if (!identical(_store, store)) {
       _store = store;
-      _recordFuture = loadDayRecord(store, widget.dayKey);
+      _dataFuture = _loadDayData(store, widget.dayKey);
     }
   }
 
   void _reloadRecord() {
     if (_store == null) return;
     setState(() {
-      _recordFuture = loadDayRecord(_store!, widget.dayKey);
+      _dataFuture = _loadDayData(_store!, widget.dayKey);
       _notice = null;
     });
   }
@@ -128,7 +152,7 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
       if (!mounted) return;
       setState(() {
         _generating = false;
-        _recordFuture = loadDayRecord(store, widget.dayKey);
+        _dataFuture = _loadDayData(store, widget.dayKey);
       });
     } on AiException catch (e) {
       // D 轨适配器抛出的中文文案直接展示，不再二次翻译
@@ -161,6 +185,46 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
     );
     if (edited == null || !mounted) return;
     _reloadRecord();
+  }
+
+  /// 写/改手记：落库经对话框的 onSave 回调完成（失败留在对话框内提示），
+  /// 保存成功返回后重载本日数据刷新手记卡。dayKey 恒取当前面板日期。
+  Future<void> _editNote(ManualNote? existing) async {
+    if (_store == null) return;
+    final store = _store!;
+    final saved = await showEditNoteDialog(
+      context,
+      dayKey: widget.dayKey,
+      note: existing,
+      onSave: store.putNote,
+    );
+    if (saved == null || !mounted) return;
+    _reloadRecord();
+  }
+
+  /// 删除手记：二次确认后走 store.deleteNote——只删手记，
+  /// 绝不连带删 AI 总结/照片（两者并存互不覆盖）。
+  Future<void> _confirmDeleteNote() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('删除这条手记？'),
+        content: const Text('删除后无法恢复，AI 总结与照片不受影响。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || _store == null || !mounted) return;
+    await _store!.deleteNote(widget.dayKey);
+    if (mounted) _reloadRecord();
   }
 
   Future<void> _showKeyGuide() async {
@@ -266,8 +330,8 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
   }
 
   Widget _buildLoaded(BuildContext context) {
-    return FutureBuilder<DayRecord>(
-      future: _recordFuture,
+    return FutureBuilder<_DayData>(
+      future: _dataFuture,
       builder: (context, snap) {
         if (!snap.hasData) {
           if (snap.hasError) {
@@ -300,7 +364,7 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
         }
         return _scrollShell([
           _handleBar(context),
-          _buildHeader(context, snap.data!),
+          _buildHeader(context, snap.data!.record),
           ..._buildBody(context, snap.data!),
         ]);
       },
@@ -341,10 +405,12 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
 
   // ---------------------------------------------------------------- 主体
 
-  List<Widget> _buildBody(BuildContext context, DayRecord record) {
+  List<Widget> _buildBody(BuildContext context, _DayData data) {
+    final record = data.record;
+    final note = data.note;
     final isFuture = record.dayKey > dayKeyOf(DateTime.now());
 
-    // 未来日期：只报到，不给生成入口（那天还没发生，谈不上总结）
+    // 未来日期：只报到，不给任何入口（那天还没发生，谈不上总结，也不写手记）
     if (isFuture) {
       return [
         const SizedBox(height: 8),
@@ -363,31 +429,54 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
       ];
     }
 
-    // 空日：明确告知，不放生成按钮（没有素材，AI 也只能编）
+    // 空日：AI 没素材只能编，不放生成按钮——但可以纯手写补记
     if (!record.hasPhotos) {
+      if (note == null) {
+        return [
+          const SizedBox(height: 8),
+          HandCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('这一天没有留下照片',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 6),
+                Text('也许那天没有按下快门，或者照片还没被扫描进来。也可以直接写几行手记，留住这一天。',
+                    style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () => _editNote(null),
+                    icon: const Icon(Icons.edit_note),
+                    label: const Text('写点什么'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ];
+      }
+      // 有手记：手记卡就是这一天的全部记录
       return [
         const SizedBox(height: 8),
-        HandCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('这一天没有留下照片',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 6),
-              Text('也许那天没有按下快门，或者照片还没被扫描进来。',
-                  style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-        ),
+        _noteCard(context, note),
       ];
     }
 
     return [
       const SizedBox(height: 4),
       _summaryCard(context, record),
+      // 手记卡紧跟总结卡：与 AI 总结并存，互不覆盖
+      if (note != null) ...[
+        const SizedBox(height: 12),
+        _noteCard(context, note),
+      ],
       const SizedBox(height: 12),
       _photoGrid(record),
-      const SizedBox(height: 16),
+      const SizedBox(height: 4),
+      _noteEntry(note),
+      const SizedBox(height: 4),
       _generateButton(),
       if (_notice != null) ...[
         const SizedBox(height: 8),
@@ -397,6 +486,60 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
         ),
       ],
     ];
+  }
+
+  /// 手记卡：小标题「手记」+ 正文（保留换行），右上角编辑/删除。
+  Widget _noteCard(BuildContext context, ManualNote note) {
+    final theme = Theme.of(context);
+    return HandCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.edit_note, size: 20),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text('手记', style: theme.textTheme.titleMedium),
+              ),
+              IconButton(
+                tooltip: '编辑手记',
+                onPressed: () => _editNote(note),
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+              IconButton(
+                tooltip: '删除手记',
+                onPressed: _confirmDeleteNote,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // Text 天然按 \n 断行（pre-line 语义），手写的分段原样保留
+          Text(note.body, style: theme.textTheme.bodyMedium),
+        ],
+      ),
+    );
+  }
+
+  /// 低调的补记入口：有无手记都能从这里进（无照片空日另有主按钮）。
+  Widget _noteEntry(ManualNote? note) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: () => _editNote(note),
+        icon: const Icon(Icons.edit_note, size: 18),
+        label: Text(note == null ? '添加手记' : '编辑手记'),
+      ),
+    );
   }
 
   /// AI 总结卡：有总结展示内容，没总结给生成引导。
