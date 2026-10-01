@@ -78,10 +78,16 @@ class ShareCard extends StatelessWidget {
                 SizedBox(
                   width: shareCardWidth,
                   height: _photoHeight,
-                  child: ThumbImage(
-                    sourcePath: photoPath!,
-                    size: 512, // 与照片网格同档；750 宽在 pixelRatio 2 下足够锐
-                    placeholderColor: ShiguangColors.paperDeep,
+                  child: ColoredBox(
+                    // contain 的留白用纸色打底，与卡片底一致不留黑边
+                    color: ShiguangColors.paperDeep,
+                    child: ThumbImage(
+                      sourcePath: photoPath!,
+                      size: 512, // 与照片网格同档；750 宽在 pixelRatio 2 下足够锐
+                      // 完整展示当日首图，不做 cover 裁切——用户要能看见整张照片
+                      fit: BoxFit.contain,
+                      placeholderColor: ShiguangColors.paperDeep,
+                    ),
                   ),
                 ),
               Expanded(
@@ -132,46 +138,60 @@ class ShareCard extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 20),
-                      // 正文弹性占位 + ClipRect：超长总结裁切而不与下方
-                      // 标签/亮点重叠，更不会触发 RenderFlex 溢出
+                      // 正文 + 标签 + 亮点整体进弹性区，从上往下排：
+                      // OverflowBox 放行超高内容、ClipRect 在底边统一裁切——
+                      // 不再用 Spacer 抢空间（那会让正文只拿到一半高度被裁），
+                      // 也不会 RenderFlex 溢出报错。落款独立钉在卡片底部。
                       Expanded(
                         child: ClipRect(
-                          child: Text(
-                            summary.narrative,
-                            style: TextStyle(
-                              fontSize: 25,
-                              height: 1.65,
-                              color: ink.withValues(alpha: 0.92),
+                          child: OverflowBox(
+                            maxHeight: double.infinity,
+                            alignment: Alignment.topLeft,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  summary.narrative,
+                                  style: TextStyle(
+                                    fontSize: 25,
+                                    height: 1.65,
+                                    color: ink.withValues(alpha: 0.92),
+                                  ),
+                                ),
+                                if (summary.tags.isNotEmpty) ...[
+                                  const SizedBox(height: 16),
+                                  Wrap(
+                                    spacing: 10,
+                                    runSpacing: 10,
+                                    children: [
+                                      for (final t in summary.tags)
+                                        _tagChip(t),
+                                    ],
+                                  ),
+                                ],
+                                if (summary.highlights.isNotEmpty) ...[
+                                  const SizedBox(height: 16),
+                                  for (final h in summary.highlights)
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 6),
+                                      child: Text(
+                                        '✨ $h',
+                                        style: TextStyle(
+                                          fontSize: 23,
+                                          height: 1.4,
+                                          color: ink.withValues(alpha: 0.9),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ],
                             ),
                           ),
                         ),
                       ),
-                      if (summary.tags.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            for (final t in summary.tags) _tagChip(t),
-                          ],
-                        ),
-                      ],
-                      if (summary.highlights.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        for (final h in summary.highlights)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 6),
-                            child: Text(
-                              '✨ $h',
-                              style: TextStyle(
-                                fontSize: 23,
-                                height: 1.4,
-                                color: ink.withValues(alpha: 0.9),
-                              ),
-                            ),
-                          ),
-                      ],
-                      const Spacer(),
+                      const SizedBox(height: 16),
                       Center(
                         child: Text(
                           '拾光手册',
@@ -246,19 +266,20 @@ Future<Uint8List?> renderShareCardPng(
   final boundaryKey = GlobalKey();
   final entry = OverlayEntry(
     builder: (_) => Positioned(
-      // 挂到屏幕外：不挡用户，但照常布局与绘制（截图靠的是图层，不是可见）
+      // 挂到屏幕外：不挡用户，但照常布局与绘制（截图靠的是图层，不是可见）。
+      // width/height 必须写死：不给的话 Positioned 只约束 left/top，
+      // 卡片会被屏幕尺寸钳住（手机屏高 < 1000 是常态），正文弹性区塌缩、
+      // 照片文字被挤出画布——真机「被卡掉一部分」的根因。
       left: -20000,
       top: 0,
+      width: shareCardWidth,
+      height: shareCardHeight,
       child: RepaintBoundary(
         key: boundaryKey,
-        child: SizedBox(
-          width: shareCardWidth,
-          height: shareCardHeight,
-          child: ShareCard(
-            dayKey: record.dayKey,
-            summary: summary,
-            photoPath: photoPath,
-          ),
+        child: ShareCard(
+          dayKey: record.dayKey,
+          summary: summary,
+          photoPath: photoPath,
         ),
       ),
     ),

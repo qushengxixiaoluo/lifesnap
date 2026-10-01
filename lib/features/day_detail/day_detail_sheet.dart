@@ -270,19 +270,31 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
     }
   }
 
-  /// 卡片已渲染后的去向面板（平台裁剪动作项）。
+  /// 卡片已渲染后的去向面板——每平台恰好两个动作，标题直接把两条路说全。
   Future<void> _showExportActions(Uint8List bytes, int dayKey) async {
+    // 大白话标题，两条路都点名，不再让用户猜「去向」是几个意思
+    final headline = switch ((isMobilePlatform, kIsWeb)) {
+      (true, _) => '卡片已生成——保存到相册，或分享给好友',
+      (_, true) => '卡片已生成——下载图片，或分享给好友',
+      _ => '卡片已生成——分享给好友，或保存为文件',
+    };
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetCtx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: const Icon(Icons.auto_awesome),
-              title: const Text('卡片已生成，选择去向'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  headline,
+                  style: Theme.of(sheetCtx).textTheme.titleSmall,
+                ),
+              ),
             ),
-            if (isMobilePlatform)
+            if (isMobilePlatform) ...[
               ListTile(
                 leading: const Icon(Icons.photo_library_outlined),
                 title: const Text('保存到相册'),
@@ -291,16 +303,16 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
                   () => saveShareCardToGallery(bytes, dayKey),
                 ),
               ),
-            ListTile(
-              leading: const Icon(Icons.share_outlined),
-              title: const Text('分享…'),
-              subtitle: const Text('微信、QQ 等都在分享面板里'),
-              onTap: () => _runExportAction(sheetCtx, () async {
-                await shareShareCard(bytes, dayKey);
-                return '分享面板已关闭';
-              }),
-            ),
-            if (kIsWeb)
+              ListTile(
+                leading: const Icon(Icons.share_outlined),
+                title: const Text('分享给好友'),
+                subtitle: const Text('微信、QQ 等都在分享面板里'),
+                onTap: () => _runExportAction(sheetCtx, () async {
+                  await shareShareCard(bytes, dayKey);
+                  return '分享面板已关闭';
+                }),
+              ),
+            ] else if (kIsWeb) ...[
               ListTile(
                 leading: const Icon(Icons.download_outlined),
                 title: const Text('下载图片'),
@@ -308,8 +320,25 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
                   sheetCtx,
                   () => saveShareCardToGallery(bytes, dayKey),
                 ),
-              )
-            else
+              ),
+              ListTile(
+                leading: const Icon(Icons.share_outlined),
+                title: const Text('分享给好友'),
+                onTap: () => _runExportAction(sheetCtx, () async {
+                  await shareShareCard(bytes, dayKey);
+                  return '分享面板已关闭';
+                }),
+              ),
+            ] else ...[
+              ListTile(
+                leading: const Icon(Icons.share_outlined),
+                title: const Text('分享给好友'),
+                subtitle: const Text('微信、QQ 等都在分享面板里'),
+                onTap: () => _runExportAction(sheetCtx, () async {
+                  await shareShareCard(bytes, dayKey);
+                  return '分享面板已关闭';
+                }),
+              ),
               ListTile(
                 leading: const Icon(Icons.save_alt_outlined),
                 title: const Text('保存为文件'),
@@ -318,6 +347,7 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
                   () => saveShareCardFile(bytes, dayKey),
                 ),
               ),
+            ],
             const SizedBox(height: 8),
           ],
         ),

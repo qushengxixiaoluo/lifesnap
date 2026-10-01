@@ -34,11 +34,16 @@ class ThumbImage extends StatelessWidget {
   /// 占位色（水彩感默认即可，调用方可传纸色）。
   final Color? placeholderColor;
 
+  /// 图片填充方式：网格/节点用 cover 裁切填满，分享卡等需要
+  /// 完整展示的场景传 [BoxFit.contain]（默认 cover，原有调用不变）。
+  final BoxFit fit;
+
   const ThumbImage({
     super.key,
     required this.sourcePath,
     required this.size,
     this.placeholderColor,
+    this.fit = BoxFit.cover,
   });
 
   /// key → 该缩略图的字节通知器（静态：跨组件实例共享，滚动复用不丢状态）。
@@ -80,7 +85,7 @@ class ThumbImage extends StatelessWidget {
         if (bytes != null) {
           return Image.memory(
             bytes,
-            fit: BoxFit.cover,
+            fit: fit,
             gaplessPlayback: true, // 复用时避免闪回占位色
             errorBuilder: (_, _, _) => _placeholder(),
           );

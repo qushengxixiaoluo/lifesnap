@@ -14,6 +14,7 @@ library;
 
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -127,7 +128,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('导出卡片：渲染后弹出去向面板，三动作齐全', (tester) async {
+  testWidgets('导出卡片（手机）：面板恰好两项，保存到相册 / 分享给好友', (tester) async {
     const dayKey = 20260920;
     final store = await _storeWithDay(dayKey);
     await _openSheet(tester, store, dayKey);
@@ -136,30 +137,40 @@ void main() {
 
     // 离屏渲染完成后卡片应被摘掉，不许留残影
     expect(find.byType(ShareCard), findsNothing);
-    expect(find.text('卡片已生成，选择去向'), findsOneWidget);
+    // 标题把两条路都点名；手机上恰好两项，不放「保存为文件」干扰选择
+    expect(find.text('卡片已生成——保存到相册，或分享给好友'), findsOneWidget);
     expect(find.text('保存到相册'), findsOneWidget);
-    expect(find.text('分享…'), findsOneWidget);
-    expect(find.text('保存为文件'), findsOneWidget);
+    expect(find.text('分享给好友'), findsOneWidget);
+    expect(find.text('保存为文件'), findsNothing);
   });
 
-  testWidgets('保存为文件：行内提示路径且文件真实存在', (tester) async {
-    const dayKey = 20260920;
-    final store = await _storeWithDay(dayKey);
-    await _openSheet(tester, store, dayKey);
+  testWidgets('保存为文件（桌面）：行内提示路径且文件真实存在', (tester) async {
+    // 桌面语义：没有相册，去向是「分享给好友 / 保存为文件」。
+    // foundation 的调试变量必须在测试体内复位，所以包 try/finally。
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
+      const dayKey = 20260920;
+      final store = await _storeWithDay(dayKey);
+      await _openSheet(tester, store, dayKey);
 
-    await _tapExport(tester);
-    await tester.tap(find.text('保存为文件'));
-    await _settleAfterAction(tester);
-    await _scrollToBottom(tester);
+      await _tapExport(tester);
+      expect(find.text('分享给好友'), findsOneWidget);
+      expect(find.text('保存为文件'), findsOneWidget);
+      await tester.tap(find.text('保存为文件'));
+      await _settleAfterAction(tester);
+      await _scrollToBottom(tester);
 
-    // 行内提示给出完整路径（成败两色中的成功绿），文件必须真实落盘
-    final text = find.textContaining('已保存到文件：');
-    expect(text, findsOneWidget);
-    final shown = tester
-        .widget<Text>(text)
-        .data!
-        .replaceFirst('已保存到文件：', '');
-    expect(File(shown).existsSync(), isTrue, reason: '提示的路径必须真实存在');
+      // 行内提示给出完整路径（成败两色中的成功绿），文件必须真实落盘
+      final text = find.textContaining('已保存到文件：');
+      expect(text, findsOneWidget);
+      final shown = tester
+          .widget<Text>(text)
+          .data!
+          .replaceFirst('已保存到文件：', '');
+      expect(File(shown).existsSync(), isTrue, reason: '提示的路径必须真实存在');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 
   testWidgets('保存到相册：平台通道缺失时转行内错误提示，不崩溃', (tester) async {
@@ -178,6 +189,12 @@ void main() {
   });
 
   testWidgets('ShareCard 纯渲染：日期/标题/落款上屏', (tester) async {
+    // 视口默认 800×600 会把 750×1000 的卡钳矮（真机导出层同因踩过），
+    // 放大到卡片尺寸才能验证真实布局
+    tester.view.physicalSize = const Size(shareCardWidth, shareCardHeight);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
     final summary = AiSummary(
       dayKey: 20260920,
       title: '海边的午后',
@@ -203,5 +220,8 @@ void main() {
     expect(find.text('海边的午后'), findsOneWidget);
     expect(find.textContaining('2026年9月20日'), findsOneWidget);
     expect(find.text('拾光手册'), findsOneWidget);
+    // 1000 高下正文弹性区必须有真实空间（曾经塌缩成 4px）
+    final clip = tester.getSize(find.byType(ClipRect).first);
+    expect(clip.height, greaterThan(200), reason: '正文弹性区高度异常');
   });
 }
