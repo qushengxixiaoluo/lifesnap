@@ -20,6 +20,7 @@ import '../../core/storage/photo_index_store.dart';
 import '../../core/thumbnails/thumb_image.dart';
 import '../../widgets/hand_card.dart';
 import '../settings/settings_page.dart';
+import 'edit_summary_dialog.dart';
 import 'photo_viewer.dart';
 
 /// 展开某一天详情的底部面板（由 day_detail_launcher 嵌进 DraggableScrollableSheet）。
@@ -145,6 +146,21 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
         });
       }
     }
+  }
+
+  /// 编辑总结：落库经对话框的 onSave 回调完成（失败留在对话框内提示），
+  /// 保存成功返回后重载本日记录刷新卡片。
+  /// photo_sig 不变，编辑不会把总结标成「照片有更新」。
+  Future<void> _editSummary(AiSummary summary) async {
+    if (_store == null) return;
+    final store = _store!;
+    final edited = await showEditSummaryDialog(
+      context,
+      summary,
+      onSave: store.putSummary,
+    );
+    if (edited == null || !mounted) return;
+    _reloadRecord();
   }
 
   Future<void> _showKeyGuide() async {
@@ -447,6 +463,15 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(summary.title, style: theme.textTheme.titleMedium),
+                ),
+                // AI 生成的是草稿：随时可改，改完原样写回缓存
+                IconButton(
+                  tooltip: '编辑总结',
+                  onPressed: () => _editSummary(summary),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 ),
               ],
             ),
