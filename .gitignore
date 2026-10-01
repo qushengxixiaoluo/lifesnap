@@ -49,3 +49,6 @@ app.*.map.json
 
 # 金样张比对失败时的调试输出（随跑随生，不入库）
 test/failures/
+
+# 本地 feature worktree（会话临时目录，不入库）
+.claude/worktrees/

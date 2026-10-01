@@ -57,8 +57,9 @@ final onThisDayEntriesProvider =
     final photoCount = meta?.photoCount ?? 0;
 
     // hasSummary/hasNote 以 dayIndex 标志为准，但补一次回读兜底：
-    // 阶段 0 内存实现的 dayIndex 只从照片与手记聚合，「只有总结」的日子
-    // 进不了索引（同 map_providers 的兜底理由）；真实实现已回填时这只是两次快查。
+    // 日索引以照片/手记聚合为主，「只有总结」的孤儿日（照片全删后总结尚存
+    // 的瞬间）可能不在索引里（同 map_providers 的 summaryOf 兜底理由）；
+    // 常规路径下标志已回填，这只是两次快查。
     var hasSummary = meta?.hasSummary ?? false;
     var hasNote = meta?.hasNote ?? false;
     if (!hasSummary) hasSummary = await store.summaryOf(dayKey) != null;

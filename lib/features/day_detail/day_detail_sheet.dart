@@ -90,7 +90,9 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
 
   Future<_DayData>? _dataFuture;
   bool _generating = false;
-  String? _notice; // 生成失败等行内提示（放行内而不是 SnackBar：SnackBar 会被面板盖住）
+  String? _notice; // 行内提示（放行内而不是 SnackBar：SnackBar 会被面板盖住）
+  // true = 失败（红）；导出成功这类信息走 false（绿），别把喜报画成报错
+  bool _noticeIsError = true;
 
   void _bindStore(PhotoIndexStore store) {
     if (!identical(_store, store)) {
@@ -130,6 +132,7 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
       if (mounted) {
         setState(() {
           _generating = false;
+          _noticeIsError = true;
           _notice = '读取 API Key 失败：$e';
         });
       }
@@ -160,6 +163,7 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
       if (mounted) {
         setState(() {
           _generating = false;
+          _noticeIsError = true;
           _notice = e.message;
         });
       }
@@ -167,6 +171,7 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
       if (mounted) {
         setState(() {
           _generating = false;
+          _noticeIsError = true;
           _notice = '生成失败：$e';
         });
       }
@@ -235,10 +240,16 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
       final path = await exportDayShareCard(context, record);
       if (!mounted) return;
       setState(() {
+        _noticeIsError = path == null;
         _notice = path == null ? '导出失败：当天没有总结' : '已导出：$path';
       });
     } catch (e) {
-      if (mounted) setState(() => _notice = '导出失败：$e');
+      if (mounted) {
+        setState(() {
+          _noticeIsError = true;
+          _notice = '导出失败：$e';
+        });
+      }
     }
   }
 
@@ -497,7 +508,10 @@ class _DayDetailSheetState extends ConsumerState<DayDetailSheet> {
         const SizedBox(height: 8),
         Text(
           _notice!,
-          style: const TextStyle(fontSize: 13, color: ShiguangColors.danger),
+          style: TextStyle(
+            fontSize: 13,
+            color: _noticeIsError ? ShiguangColors.danger : ShiguangColors.leafDark,
+          ),
         ),
       ],
     ];

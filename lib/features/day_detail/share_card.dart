@@ -273,11 +273,17 @@ Future<String?> exportDayShareCard(
 
     final boundary = boundaryKey.currentContext?.findRenderObject()
         as RenderRepaintBoundary?;
-    if (boundary == null) return null;
+    // 渲染/编码失败必须抛错：return null 会被调用方误读成「当天没有总结」，
+    // 把真正的故障报成一句不相干的文案（按钮本来就只在有总结时出现）
+    if (boundary == null) {
+      throw StateError('卡片尚未完成布局，稍后重试');
+    }
     final image = await boundary.toImage(pixelRatio: 2); // 1500×2000 成图
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     image.dispose();
-    if (byteData == null) return null;
+    if (byteData == null) {
+      throw StateError('卡片图像编码失败');
+    }
     return await exporter.saveShareCardPng(
       byteData.buffer.asUint8List(),
       record.dayKey,

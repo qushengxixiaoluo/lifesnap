@@ -41,8 +41,10 @@ class MonthlyReviewView {
   });
 
   /// 月报存在但指纹已对不上 → 日总结有增删改，月报标失效。
+  /// inputSig 为 null（当月日总结被删光）同样算失效：
+  /// 否则一篇依据已不存在的日总结写成的月报会以「有效」姿态继续展示。
   bool get stale =>
-      review != null && inputSig != null && review!.inputSig != inputSig;
+      review != null && (inputSig == null || review!.inputSig != inputSig);
 
   bool get hasDaySummaries => dayCount > 0;
 }
